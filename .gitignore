@@ -1,0 +1,5 @@
+node_modules/
+gas/.clasp.json
+tests/e2e/shots/
+dist/
+.DS_Store

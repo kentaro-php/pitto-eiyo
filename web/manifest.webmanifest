@@ -1,0 +1,17 @@
+{
+  "name": "ピッと栄養",
+  "short_name": "ピッと栄養",
+  "description": "バーコードを読むだけで栄養を記録。日・月の合計と目標との過不足がすぐ分かる。",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f2f2f6",
+  "theme_color": "#2563eb",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ピッと栄養</title>
+<meta name="description" content="バーコードを読むだけで栄養を記録。日・月の合計と目標との過不足がすぐ分かる。">
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="ピッと栄養">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+<div class="banner" id="offline-banner" hidden>オフラインです。記録は端末に保存し、つながったら送信します。</div>
+<div class="page">
+
+  <section id="view-login" class="view" hidden>
+    <div class="login">
+      <img class="logo" src="icons/icon.svg" alt="">
+      <h1>ピッと栄養</h1>
+      <p>バーコードを読むだけで栄養を記録。日・月の合計と目標との過不足がすぐ分かります。</p>
+      <div id="gsi-button"></div>
+      <p class="hint" id="login-status"></p>
+      <p class="note">記録は Google アカウントごとに保存されます。健康上の助言ではありません。</p>
+    </div>
+  </section>
+
+  <section id="view-home" class="view" hidden>
+    <div class="topbar"><span></span><h1>ピッと栄養</h1><span class="side" id="home-side"></span></div>
+    <div class="pills">
+      <button class="pill" type="button" id="prev-day">← 前日</button>
+      <button class="pill" type="button" id="today-btn">今日</button>
+      <button class="pill" type="button" id="next-day">翌日 →</button>
+    </div>
+    <div class="card">
+      <h2 id="home-date">今日</h2>
+      <div class="summary" id="home-summary"></div>
+      <div id="home-nutrients"></div>
+      <p class="hint" id="home-hint" hidden>目標は仮の値です。設定で性別・体重などを入れると自分用に計算します。</p>
+    </div>
+    <div class="card">
+      <button class="btn primary" type="button" id="go-scan">バーコードを読む</button>
+      <div class="two">
+        <button class="btn soft" type="button" id="go-manual">JANを入力</button>
+        <button class="btn soft" type="button" id="go-recent">最近の商品</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row"><h2>記録</h2><span class="hint" id="home-sync"></span></div>
+      <div id="home-logs"></div>
+    </div>
+  </section>
+
+  <section id="view-scan" class="view" hidden>
+    <div class="topbar"><button class="back" type="button" id="scan-back">← 戻る</button><h1>バーコードを読む</h1><span></span></div>
+    <div class="card">
+      <div class="scanner" id="scanner">
+        <video id="scan-video" playsinline muted autoplay></video>
+        <div class="frame"></div>
+        <div class="msg" id="scan-msg">枠の中にバーコードを合わせてください</div>
+      </div>
+      <div class="two">
+        <button class="btn soft" type="button" id="scan-start">カメラを起動</button>
+        <label class="btn soft" for="scan-file">写真から読む</label>
+        <input type="file" id="scan-file" class="vh" accept="image/*" capture="environment">
+      </div>
+      <p class="hint" id="scan-status" aria-live="polite"></p>
+    </div>
+    <div class="card">
+      <div class="field">
+        <label for="jan-input">JANコード（13桁または8桁）</label>
+        <input class="input" id="jan-input" inputmode="numeric" pattern="[0-9]*" placeholder="例: 4901234567894" autocomplete="off">
+      </div>
+      <button class="btn soft" type="button" id="jan-search">このコードで検索</button>
+      <p class="err" id="jan-error" hidden></p>
+    </div>
+    <div class="card">
+      <h2>最近の商品</h2>
+      <div class="list" id="recent-list"></div>
+    </div>
+  </section>
+
+  <section id="view-product" class="view" hidden>
+    <div class="topbar"><button class="back" type="button" id="product-back">← 戻る</button><h1>商品</h1><span></span></div>
+    <div class="card">
+      <div>
+        <div class="pname" id="p-name"></div>
+        <p class="hint" id="p-sub"></p>
+      </div>
+      <div class="ntable" id="p-table"></div>
+      <button class="btn soft" type="button" id="p-edit">商品情報を修正</button>
+    </div>
+    <div class="card">
+      <div class="field">
+        <span class="lbl" id="amount-label">量</span>
+        <div class="chips" id="amount-chips" aria-labelledby="amount-label"></div>
+        <div class="unitrow">
+          <input class="input" id="amount-input" type="number" step="0.1" min="0" inputmode="decimal" aria-label="量の数値">
+          <span class="unit" id="amount-unit">個</span>
+        </div>
+      </div>
+      <div class="field">
+        <span class="lbl" id="meal-label">食事区分</span>
+        <div class="chips" id="meal-chips" aria-labelledby="meal-label"></div>
+      </div>
+      <div class="field">
+        <label for="log-date">日付</label>
+        <input class="input" type="date" id="log-date">
+      </div>
+      <p class="hint" id="p-preview"></p>
+      <button class="btn primary" type="button" id="log-save">この内容で登録</button>
+    </div>
+  </section>
+
+  <section id="view-register" class="view" hidden>
+    <div class="topbar"><button class="back" type="button" id="reg-back">← 戻る</button><h1 id="reg-title">商品を登録</h1><span></span></div>
+    <div class="card">
+      <p class="hint" id="reg-intro">この商品はまだ登録されていません。パッケージの栄養成分表示を撮影すると、数値を自動で入力します。</p>
+      <label class="btn tint" for="ocr-file" id="ocr-btn">栄養成分表示を撮影して自動入力</label>
+      <input type="file" id="ocr-file" class="vh" accept="image/*" capture="environment">
+      <p class="hint" id="ocr-status" aria-live="polite"></p>
+    </div>
+    <div class="card">
+      <div class="field"><label for="f-jan">JANコード</label><input class="input" id="f-jan" readonly></div>
+      <div class="field"><label for="f-name">商品名</label><input class="input" id="f-name" placeholder="例: サラダチキン プレーン" autocomplete="off"></div>
+      <div class="two">
+        <div class="field"><label for="f-brand">メーカー（任意）</label><input class="input" id="f-brand" autocomplete="off"></div>
+        <div class="field"><label for="f-qty">内容量の表記（任意）</label><input class="input" id="f-qty" placeholder="例: 110g" autocomplete="off"></div>
+      </div>
+      <div class="field">
+        <label for="f-basis">栄養成分表示の基準量</label>
+        <select class="input" id="f-basis">
+          <option value="per_package">1包装（1個・1本・1袋）あたり</option>
+          <option value="per_serving">1食あたり</option>
+          <option value="per_100g">100g / 100mlあたり</option>
+        </select>
+      </div>
+      <div class="two">
+        <div class="field"><label for="f-serving-g" id="f-serving-g-label">1包装の質量（g / ml）</label><input class="input" id="f-serving-g" type="number" inputmode="decimal" min="0" placeholder="例: 110"></div>
+        <div class="field"><label for="f-package-g">内容量の総量（g / ml・任意）</label><input class="input" id="f-package-g" type="number" inputmode="decimal" min="0" placeholder="例: 110"></div>
+      </div>
+      <div class="two">
+        <div class="field"><label for="f-energy_kcal">熱量（kcal）</label><input class="input" id="f-energy_kcal" type="number" inputmode="decimal" min="0" step="1"></div>
+        <div class="field"><label for="f-protein_g">たんぱく質（g）</label><input class="input" id="f-protein_g" type="number" inputmode="decimal" min="0" step="0.1"></div>
+      </div>
+      <div class="two">
+        <div class="field"><label for="f-fat_g">脂質（g）</label><input class="input" id="f-fat_g" type="number" inputmode="decimal" min="0" step="0.1"></div>
+        <div class="field"><label for="f-carb_g">炭水化物（g）</label><input class="input" id="f-carb_g" type="number" inputmode="decimal" min="0" step="0.1"></div>
+      </div>
+      <div class="two">
+        <div class="field"><label for="f-salt_g">食塩相当量（g）</label><input class="input" id="f-salt_g" type="number" inputmode="decimal" min="0" step="0.01"></div>
+        <div class="field"><label for="f-sodium_mg">ナトリウム（mg）で表示の場合</label><input class="input" id="f-sodium_mg" type="number" inputmode="decimal" min="0" step="1" placeholder="自動で換算"></div>
+      </div>
+      <details>
+        <summary>任意の項目（糖質・食物繊維・飽和脂肪酸）</summary>
+        <div class="two">
+          <div class="field"><label for="f-sugar_g">糖質（g）</label><input class="input" id="f-sugar_g" type="number" inputmode="decimal" min="0" step="0.1"></div>
+          <div class="field"><label for="f-fiber_g">食物繊維（g）</label><input class="input" id="f-fiber_g" type="number" inputmode="decimal" min="0" step="0.1"></div>
+        </div>
+        <div class="two">
+          <div class="field"><label for="f-satfat_g">飽和脂肪酸（g）</label><input class="input" id="f-satfat_g" type="number" inputmode="decimal" min="0" step="0.1"></div>
+          <div></div>
+        </div>
+      </details>
+      <p class="err" id="f-error" hidden></p>
+      <button class="btn primary" type="button" id="reg-save">保存して登録へ進む</button>
+    </div>
+  </section>
+
+  <section id="view-month" class="view" hidden>
+    <div class="topbar"><span></span><h1>月次</h1><span></span></div>
+    <div class="pills">
+      <button class="pill" type="button" id="prev-month">← 前月</button>
+      <button class="pill" type="button" id="this-month">今月</button>
+      <button class="pill" type="button" id="next-month">翌月 →</button>
+    </div>
+    <div class="card">
+      <h2 id="month-title"></h2>
+      <div class="summary" id="month-summary"></div>
+      <svg id="month-chart" class="chart" viewBox="0 0 330 160" role="img" aria-label="日ごとの熱量"></svg>
+      <div id="month-nutrients"></div>
+    </div>
+  </section>
+
+  <section id="view-goal" class="view" hidden>
+    <div class="topbar"><span></span><h1>設定</h1><span></span></div>
+    <div class="card">
+      <h2>あなたの情報</h2>
+      <div class="field">
+        <span class="lbl" id="sex-label">性別</span>
+        <div class="chips" id="sex-chips" aria-labelledby="sex-label">
+          <button class="chip" type="button" data-v="m" aria-pressed="false">男性</button>
+          <button class="chip" type="button" data-v="f" aria-pressed="false">女性</button>
+        </div>
+      </div>
+      <div class="two">
+        <div class="field"><label for="s-birth">生まれた年</label><input class="input" id="s-birth" type="number" inputmode="numeric" placeholder="例: 1985"></div>
+        <div class="field"><label for="s-height">身長（cm）</label><input class="input" id="s-height" type="number" inputmode="decimal" placeholder="例: 170"></div>
+      </div>
+      <div class="two">
+        <div class="field"><label for="s-weight">体重（kg）</label><input class="input" id="s-weight" type="number" inputmode="decimal" step="0.1" placeholder="例: 65"></div>
+        <div class="field">
+          <label for="s-pal">身体活動レベル</label>
+          <select class="input" id="s-pal">
+            <option value="low">低い</option>
+            <option value="normal" selected>ふつう</option>
+            <option value="high">高い</option>
+          </select>
+        </div>
+      </div>
+      <div class="two">
+        <div class="field"><label for="s-kcal">目標カロリー（空欄なら自動計算）</label><input class="input" id="s-kcal" type="number" inputmode="numeric" min="0" step="10" placeholder="例: 2200"></div>
+        <div class="field"><label for="s-adjust">自動計算への増減（kcal・任意）</label><input class="input" id="s-adjust" type="number" inputmode="numeric" step="50" placeholder="例: -300"></div>
+      </div>
+      <label class="check"><input type="checkbox" id="s-htn"><span>高血圧で治療中（食塩の目標を6.0g未満にする）</span></label>
+      <button class="btn primary" type="button" id="s-save">目標を計算して保存</button>
+      <p class="err" id="s-error" hidden></p>
+    </div>
+    <div class="card">
+      <h2>1日の目標</h2>
+      <div class="kv" id="targets-table"></div>
+      <p class="note">「日本人の食事摂取基準（2025年版）」の考え方（基礎代謝基準値×体重×身体活動レベル、エネルギー産生栄養素バランス、食塩の目標量）で計算した目安です。医療的な助言ではありません。持病のある方は医師・管理栄養士にご相談ください。</p>
+    </div>
+    <div class="card">
+      <h2>アカウント</h2>
+      <p class="hint" id="account-info"></p>
+      <p class="hint" id="data-stats"></p>
+      <button class="btn soft" type="button" id="sync-now">いま同期する</button>
+      <button class="btn soft" type="button" id="logout">ログアウト</button>
+      <button class="btn danger" type="button" id="del-all">退会（すべての記録を削除）</button>
+      <div id="del-confirm" hidden>
+        <p class="err">あなたの記録・目標・アカウント情報をサーバーから削除します。元に戻せません。</p>
+        <div class="two">
+          <button class="btn danger" type="button" id="del-yes">削除する</button>
+          <button class="btn soft" type="button" id="del-no">やめる</button>
+        </div>
+      </div>
+      <p class="note" id="app-version"></p>
+    </div>
+  </section>
+
+</div>
+
+<nav class="tabbar" aria-label="メイン" id="tabbar" hidden>
+  <button class="tab" type="button" data-view="home" aria-current="page">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/></svg>今日
+  </button>
+  <button class="tab" type="button" data-view="month">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>月次
+  </button>
+  <button class="tab" type="button" data-view="goal">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>設定
+  </button>
+</nav>
+<div class="toast" id="toast" role="status"></div>
+
+<script src="config.js"></script>
+<script src="logic.js"></script>
+<script src="vendor/zxing-library-0.21.3.min.js" defer></script>
+<script src="api.js"></script>
+<script src="auth.js"></script>
+<script src="store.js"></script>
+<script src="scanner.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

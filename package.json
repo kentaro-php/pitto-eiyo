@@ -1,0 +1,18 @@
+{
+  "name": "pitto-eiyo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ピッと栄養 — バーコードで栄養記録（GitHub Pages + GAS + スプレッドシート）",
+  "scripts": {
+    "sync": "bash scripts/sync-shared.sh",
+    "test": "node --test tests/logic.test.js gas/test/api.test.js gas/test/bundle.test.js",
+    "e2e": "node tests/e2e/run.js",
+    "dev": "node gas/test/server.js 8787",
+    "icons": "node scripts/make-icons.js",
+    "bundle": "bash scripts/bundle-gas.sh",
+    "push": "cd gas && clasp push"
+  },
+  "devDependencies": {
+    "playwright": "^1.50.0"
+  }
+}
