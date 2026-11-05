@@ -14,10 +14,10 @@ test('gas/bundle/Code.gs は単体で doGet/doPost/selfCheck が動く', () => {
   vm.runInContext(bundle, ctx, { filename: 'bundle/Code.gs' });
   assert.equal(typeof ctx.doGet, 'function'); assert.equal(typeof ctx.doPost, 'function');
   const check = ctx.selfCheck();
-  assert.equal(check.ok, true, JSON.stringify(check)); assert.equal(check.tables.length, 7);
+  assert.equal(check.ok, true, JSON.stringify(check)); assert.equal(check.tables.length, 8);
   const health = JSON.parse(ctx.doGet({ parameter: { action: 'health' } }).getContent());
   assert.equal(health.ok, true); assert.equal(health.data.auth_mode, 'dev');
   const created = JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ action: 'product.create', token: 'dev', jan: '4901234567894', name: 'x', serving_basis: 'per_package', energy_kcal: 100 }) } }).getContent());
   assert.equal(created.ok, true, JSON.stringify(created));
-  assert.equal(ctx.setupSheets().length, 7);
+  assert.equal(ctx.setupSheets().length, 8);
 });

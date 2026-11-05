@@ -35,6 +35,11 @@
 
   /* ---------- 認証と起動 ---------- */
   Api.setTokenProvider(Auth.token);
+  // ID トークン（1 時間）→ 長期セッション（既定 90 日）に交換。ログアウト時はサーバ側も無効化
+  Auth.setSessionHandlers(
+    function (idToken) { return Api.request('auth.session', { token: idToken }, { auth: false }); },
+    function (sessionToken) { return Api.request('auth.signout', { token: sessionToken }, { auth: false }); }
+  );
   function onAuth() {
     var authed = Auth.isValid();
     state.authed = authed;
@@ -653,7 +658,8 @@
     $('s-error').hidden = true;
     renderTargets();
     var u = Auth.user() || {}, su = Store.S.user || {};
-    $('account-info').textContent = (su.name || u.name || '') + (u.email ? '（' + u.email + '）' : '') + (Auth.mode() === 'dev' ? ' · 開発モード' : '') + (su.is_admin ? ' · 管理者' : '');
+    var until = Auth.kind() === 'session' && isFinite(Auth.expiresAt()) ? ' · ' + L.dateStr(new Date(Auth.expiresAt() * 1000)).replace(/-/g, '/') + ' までログイン不要' : '';
+    $('account-info').textContent = (su.name || u.name || '') + (u.email ? '（' + u.email + '）' : '') + (Auth.mode() === 'dev' ? ' · 開発モード' : '') + (su.is_admin ? ' · 管理者' : '') + until;
     var pending = Store.S.queue.length;
     $('data-stats').textContent = '端末内の記録 ' + Store.S.logs.length + '件 · 商品 ' + Object.keys(Store.S.products).length + '件' + (pending ? ' · 送信待ち ' + pending + '件' : '') + (Store.S.lastSync ? ' · 最終同期 ' + String(Store.S.lastSync).replace('T', ' ').slice(0, 16) : '');
     $('del-confirm').hidden = true;

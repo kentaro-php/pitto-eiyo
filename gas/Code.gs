@@ -58,6 +58,8 @@ function routes_() {
     'profile.get':     { fn: Profile.get,      auth: true },
     'profile.update':  { fn: Profile.update,   auth: true,  write: true },
     'account.delete':  { fn: Profile.deleteAccount, auth: true, write: true },
+    'auth.session':    { fn: Auth.createSession,  auth: true, write: true },
+    'auth.signout':    { fn: Auth.revokeSession,  auth: true, write: true },
     'sync.bootstrap':  { fn: Sync.bootstrap,   auth: true }
   };
 }

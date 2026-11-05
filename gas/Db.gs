@@ -16,7 +16,8 @@ var Db = (function () {
       'energy_kcal', 'protein_g', 'fat_g', 'carb_g', 'salt_g', 'created_at', 'updated_at', 'deleted_at'],
     daily_summaries: ['user_id', 'date', 'energy_kcal', 'protein_g', 'fat_g', 'carb_g', 'salt_g', 'log_count', 'verdict_json', 'updated_at'],
     product_images: ['id', 'product_id', 'drive_file_id', 'kind', 'created_by', 'created_at'],
-    product_suggestions: ['id', 'product_id', 'user_id', 'fields_json', 'note', 'status', 'created_at']
+    product_suggestions: ['id', 'product_id', 'user_id', 'fields_json', 'note', 'status', 'created_at'],
+    sessions: ['id', 'user_id', 'email', 'display_name', 'picture', 'created_at', 'expires_at', 'last_used_at', 'deleted_at']
   };
   /* 読み出し時に必ず文字列として扱う列（シートが数値や日付に自動変換しても元に戻す） */
   var TEXT_COLS = {};

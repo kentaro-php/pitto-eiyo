@@ -360,3 +360,40 @@ test('検索の並び: 本人の手入力商品 → 標準成分表 → 共有�
   const r = gas.call('products.search', { q: 'ごはん' }).data.products;
   assert.match(r[0].jan, /^custom:/); assert.equal(r[1].source, 'food'); assert.equal(r[r.length - 1].name, 'ごはんパック');
 });
+
+test('長期セッション: auth.session で交換 / 以後 ID トークン無しで使える / ログアウトで無効 / 許可リスト / 退会で削除', () => {
+  const gas = createGas({ fetch: fetchMock, properties: { AUTH_MODE: 'google', GOOGLE_CLIENT_ID: 'client-123', ALLOWED_EMAILS: 'taro@example.com' } });
+  // ID トークン → セッション
+  const s = gas.call('auth.session', {}, 'good');
+  assert.equal(s.ok, true, JSON.stringify(s)); assert.match(s.data.session, /^ps_[0-9a-f]{64}$/); assert.equal(s.data.days, 90);
+  assert.ok(new Date(s.data.expires_at).getTime() > Date.now() + 89 * 86400000);
+  const tok = s.data.session;
+  // セッションで API が使える（tokeninfo は呼ばれない）
+  const before = gas.state.fetchCalls.filter(c => c.url.includes('tokeninfo')).length;
+  const prof = gas.call('profile.get', {}, tok);
+  assert.equal(prof.ok, true, JSON.stringify(prof)); assert.equal(prof.data.user.email, 'taro@example.com');
+  assert.equal(gas.call('log.create', { client_id: 's1', product_id: 'x', date: TODAY, amount_mode: 'serving', amount: 1 }, tok).error.code, 'not_found', '認証は通る（商品が無いだけ）');
+  assert.equal(gas.state.fetchCalls.filter(c => c.url.includes('tokeninfo')).length, before, 'セッションでは Google に問い合わせない');
+  assert.equal(gas.sheet('sessions').rows.length, 2); assert.notEqual(gas.sheet('sessions').rows[1][0], tok, 'シートにはハッシュだけ保存');
+  // 偽のセッション・期限切れは unauthorized
+  assert.equal(gas.call('profile.get', {}, 'ps_' + 'f'.repeat(64)).error.code, 'unauthorized');
+  // 許可リストから外すと、セッションがあっても forbidden（キャッシュを消して再評価）
+  gas.state.props.ALLOWED_EMAILS = 'someone@else.com';
+  assert.equal(gas.call('profile.get', {}, tok).error.code, 'forbidden');
+  gas.state.props.ALLOWED_EMAILS = 'taro@example.com';
+  // ログアウトでサーバ側も無効化
+  assert.equal(gas.call('auth.signout', { token: tok }, tok).data.revoked, true);
+  assert.equal(gas.call('profile.get', {}, tok).error.code, 'unauthorized', '無効化後は使えない');
+  assert.equal(gas.call('auth.signout', { token: 'good' }, 'good').data.revoked, false, 'ID トークンのログアウトは何もしない');
+  // 退会でセッション行が物理削除される
+  const t2 = gas.call('auth.session', {}, 'good').data.session;
+  const t3 = gas.call('auth.session', {}, t2).data.session; // セッションからの再発行も可
+  assert.equal(gas.call('profile.get', {}, t3).ok, true);
+  const del = gas.call('account.delete', { confirm: 'DELETE' }, t3);
+  assert.equal(del.ok, true, JSON.stringify(del)); assert.equal(del.data.deleted.sessions, 3, '無効化済みを含む本人の全セッション');
+  assert.equal(gas.sheet('sessions').rows.slice(1).filter(r => r[0]).length, 0);
+  assert.equal(gas.call('profile.get', {}, t2).error.code, 'unauthorized');
+  // dev モードでは従来どおり
+  const dev = createGas({ fetch: fetchMock });
+  assert.equal(dev.call('auth.session', {}).ok, true);
+});
