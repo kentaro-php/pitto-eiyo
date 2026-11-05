@@ -161,7 +161,14 @@
   function allOk(j) { return KEYS.every(function (k) { return j[k].s === 'ok'; }); }
 
   /* ---------- JAN / EAN ---------- */
-  function normJan(s) { s = String(s == null ? '' : s).replace(/\D/g, ''); return s.length === 12 ? '0' + s : s; }
+  /** 手料理・一般食品の疑似 JAN（"food:<key>"、Foods.gs が登録） */
+  function isFoodJan(s) { return /^food:[a-z0-9_]+$/.test(String(s == null ? '' : s)); }
+  function normJan(s) { if (isFoodJan(s)) return String(s); s = String(s == null ? '' : s).replace(/\D/g, ''); return s.length === 12 ? '0' + s : s; }
+  /** 検索用の正規化: 小文字、全角→半角、カタカナ→ひらがな、空白除去（web と GAS で共通） */
+  function normSearchText(s) {
+    s = String(s == null ? '' : s).toLowerCase().normalize('NFKC').replace(/\s+/g, '');
+    return s.replace(/[\u30a1-\u30f6]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0x60); });
+  }
   function eanValid(s) {
     s = String(s);
     if (!/^\d{8}$|^\d{13}$/.test(s)) return false;
@@ -250,7 +257,7 @@
   function normalizeProduct(input) {
     input = input || {};
     var jan = normJan(input.jan);
-    if (!eanValid(jan)) throw new ValidationError('JANコードが正しくありません。', 'jan');
+    if (!isFoodJan(jan) && !eanValid(jan)) throw new ValidationError('JANコードが正しくありません。', 'jan');
     var name = String(input.name || '').trim();
     if (!name) throw new ValidationError('商品名を入力してください。', 'name');
     if (name.length > 120) throw new ValidationError('商品名が長すぎます。', 'name');
@@ -302,7 +309,7 @@
     dateStr: dateStr, parseDate: parseDate, addDays: addDays, addMonths: addMonths, daysInMonth: daysInMonth,
     isValidDate: isValidDate, isValidMonth: isValidMonth, isValidTime: isValidTime, fmtDateJP: fmtDateJP, fmtMonthJP: fmtMonthJP, mealByHour: mealByHour,
     computeTargets: computeTargets, judge: judge, summarize: summarize, overall: overall, allOk: allOk,
-    normJan: normJan, eanValid: eanValid, eanCheckDigit: eanCheckDigit,
+    normJan: normJan, eanValid: eanValid, eanCheckDigit: eanCheckDigit, isFoodJan: isFoodJan, normSearchText: normSearchText,
     factorFor: factorFor, availableModes: availableModes, defaultAmount: defaultAmount, amountLabel: amountLabel, isLiquid: isLiquid,
     scaleN: scaleN, sodiumToSalt: sodiumToSalt, totals: totals, emptyTotals: emptyTotals,
     ValidationError: ValidationError, normalizeProduct: normalizeProduct, normalizeProfile: normalizeProfile
@@ -417,7 +424,7 @@ var Db = (function () {
     if (BOOL_COLS[col]) return truthy_(v);
     if (TEXT_COLS[col] || DATE_COLS[col]) {
       var s = String(v);
-      if (col === 'jan') s = PittoLogic.normJan(s);
+      if (col === 'jan') s = PittoLogic.normJan(s); // food:<key>（手料理の疑似 JAN）は normJan が素通しする
       return s;
     }
     return v;
@@ -458,6 +465,13 @@ var Db = (function () {
   function insert(name, obj) {
     sheet_(name).appendRow(toRow_(name, obj));
     return obj;
+  }
+  /** 複数行をまとめて追加（1 回の setValues。setupFoods のような一括登録用） */
+  function insertMany(name, objs) {
+    if (!objs.length) return objs;
+    var sh = sheet_(name), last = sh.getLastRow();
+    sh.getRange(last + 1, 1, objs.length, SCHEMA[name].length).setValues(objs.map(function (o) { return toRow_(name, o); }));
+    return objs;
   }
   function update(name, obj) {
     if (!obj._row) throw new ApiError('internal', '更新対象の行番号がありません。');
@@ -503,7 +517,7 @@ var Db = (function () {
     });
     cache.put(key, '1', 21600);
   }
-  return { SCHEMA: SCHEMA, setup: setup, readAll: readAll, findAll: findAll, findOne: findOne, insert: insert, update: update, deleteWhere: deleteWhere, withLock: withLock, ensureUser: ensureUser };
+  return { SCHEMA: SCHEMA, setup: setup, readAll: readAll, findAll: findAll, findOne: findOne, insert: insert, insertMany: insertMany, update: update, deleteWhere: deleteWhere, withLock: withLock, ensureUser: ensureUser };
 })();
 
 /** Apps Script エディタから一度実行: 全テーブルのタブを作成する */
@@ -663,6 +677,7 @@ var Products = (function () {
   function create(params, ctx) {
     var input = params.product || params;
     var norm = L().normalizeProduct(input);
+    if (L().isFoodJan(norm.jan)) throw new ApiError('validation', '手料理・一般食品は setupFoods で登録します。', { field: 'jan' });
     var existing = byJan(norm.jan);
     if (existing) return { product: pub(existing), created: false };
     var now = nowIso_();
@@ -701,6 +716,30 @@ var Products = (function () {
     return { suggestion_id: row.id };
   }
 
+  /** POST products.search { q, limit } — 名前・読みで商品マスタを検索（手料理・一般食品の入力用）。
+   *  手料理（source=food）は Foods.ALIASES の読み・別名でも一致させる。前方一致 → 部分一致、手料理 → それ以外の順 */
+  function search(params, ctx) {
+    var q = normText_(params.q);
+    if (!q) throw new ApiError('validation', '検索語を入力してください。', { field: 'q' });
+    if (q.length > 40) q = q.slice(0, 40);
+    var limit = Math.min(50, Math.max(1, Number(params.limit) || 30));
+    var hits = [];
+    Db.findAll('products', function (r) { return !r.deleted_at; }).forEach(function (r) {
+      var name = normText_(r.name), alias = normText_(Foods.ALIASES[r.jan] || '');
+      var score = -1;
+      if (name.indexOf(q) === 0) score = 0;
+      else if (name.indexOf(q) >= 0) score = 1;
+      else if (aliasWords_(r.jan).some(function (w) { return w.indexOf(q) === 0; })) score = 2;
+      else if (alias.indexOf(q) >= 0) score = 3;
+      if (score < 0) return;
+      hits.push({ r: r, s: score + (r.source === 'food' ? 0 : 10) });
+    });
+    hits.sort(function (a, b) { return a.s - b.s || str_(a.r.name).localeCompare(str_(b.r.name), 'ja'); });
+    return { products: hits.slice(0, limit).map(function (h) { return pub(h.r); }), total: hits.length };
+  }
+  function normText_(s) { return L().normSearchText(s); }
+  function aliasWords_(jan) { return str_(Foods.ALIASES[jan] || '').split(' ').map(normText_).filter(Boolean); }
+
   /** POST products.recent — 本人が最近記録した／登録した商品（スキャン無しで再記録するため） */
   function recent(params, ctx) {
     var limit = Math.min(50, Math.max(1, Number(params.limit) || 30));
@@ -729,8 +768,198 @@ var Products = (function () {
     } catch (e) { try { console.warn('画像の保存に失敗: ' + e); } catch (e2) { /* noop */ } }
   }
 
-  return { pub: pub, byId: byId, byJan: byJan, get: get, create: create, update: update, suggest: suggest, recent: recent, recentForUser: recentForUser };
+  return { pub: pub, byId: byId, byJan: byJan, get: get, create: create, update: update, suggest: suggest, search: search, recent: recent, recentForUser: recentForUser };
 })();
+
+/* ===================== Foods.gs ===================== */
+/* ============================================================================
+ * Foods.gs — 手料理・一般食品（ご飯・味噌汁など）の標準成分
+ *  - 出典: 文部科学省「日本食品標準成分表（八訂）増補2023年」第2章（可食部 100 g 当たり）。
+ *    値は エネルギー(kcal)・たんぱく質・脂質・炭水化物・食塩相当量・食物繊維総量。( ) 付きの推計値もそのまま採用。
+ *  - 1 品 = products の 1 行（jan は "food:<key>"、source は "food"、serving_basis は per_serving）。
+ *    1食の目安量（serving_g）を掛けた値を保存するので、アプリでは「1食／半分／2食／100g」で記録できる。
+ *  - 複数の食材からなる料理（みそ汁・カレーライスなど）は RECIPES で食材の分量から合算する。
+ *  - setupFoods() をエディタから実行すると登録（既にあれば数値を更新）。削除は deleted_at を入れる。
+ * ========================================================================== */
+var Foods = (function () {
+  var L = function () { return PittoLogic; };
+
+  /* 100 g 当たり: [食品番号, kcal, たんぱく質, 脂質, 炭水化物, 食塩相当量, 食物繊維] */
+  var PER100 = {
+    gohan: ['01088', 156, 2.5, 0.3, 37.1, 0, 1.5], genmai: ['01085', 152, 2.8, 1.0, 35.6, 0, 1.4], okayu: ['01093', 65, 1.1, 0.1, 15.7, 0, 0.1],
+    mochi: ['01117', 223, 4.0, 0.6, 50.8, 0, 0.5], onigiri: ['01111', 170, 2.7, 0.3, 39.4, 0.5, 0.4], shokupan: ['01026', 248, 8.9, 4.1, 46.4, 1.2, 4.2],
+    udon: ['01039', 95, 2.6, 0.4, 21.6, 0.3, 1.3], soba: ['01128', 130, 4.8, 1.0, 26.0, 0, 2.9], chuka: ['01048', 133, 4.9, 0.6, 29.2, 0.2, 2.8],
+    pasta: ['01064', 150, 5.8, 0.9, 32.2, 1.2, 3.0], oatmeal: ['01004', 350, 13.7, 5.7, 69.1, 0, 9.4], cornflakes: ['01137', 380, 7.8, 1.7, 83.6, 2.1, 2.4],
+    miso: ['17045', 182, 12.5, 6.0, 21.9, 12.4, 4.9], dashi: ['17021', 2, 0.3, 0, 0.3, 0.1, 0], shoyu: ['17007', 76, 7.7, 0, 7.9, 14.5, 0],
+    sato: ['03003', 391, 0, 0, 99.3, 0, 0], mirin: ['16025', 241, 0.3, 0, 43.2, 0, 0], abura: ['14006', 886, 0, 100, 0, 0, 0],
+    butter: ['14017', 700, 0.6, 81.0, 0.2, 1.9, 0], mayo: ['17042', 668, 1.4, 76.0, 3.6, 1.9, 0], cheese: ['13040', 313, 22.7, 26.0, 1.3, 2.8, 0],
+    tofu_momen: ['04032', 73, 7.0, 4.9, 1.5, 0, 1.1], tofu_kinu: ['04033', 56, 5.3, 3.5, 2.0, 0, 0.9], atsuage: ['04039', 143, 10.7, 11.3, 0.9, 0, 0.8],
+    aburaage: ['04040', 377, 23.4, 34.4, 0.4, 0, 1.3], natto: ['04046', 184, 16.5, 10.0, 12.1, 0, 9.5], tounyu: ['04052', 43, 3.6, 2.8, 2.3, 0, 0.9],
+    wakame: ['09040', 172, 14.4, 2.6, 39.6, 16.2, 29.8],
+    egg: ['12004', 142, 12.2, 10.2, 0.4, 0.4, 0], egg_yude: ['12005', 134, 12.5, 10.4, 0.3, 0.3, 0], egg_medama: ['12021', 205, 14.8, 17.6, 0.3, 0.5, 0],
+    dashimaki: ['12019', 123, 11.0, 9.2, 0.5, 1.2, 0], milk: ['13003', 61, 3.3, 3.8, 4.8, 0.1, 0], yogurt: ['13025', 56, 3.6, 3.0, 4.9, 0.1, 0],
+    tori_mune: ['11288', 177, 38.8, 3.3, 0.1, 0.2, 0], tori_momo: ['11222', 220, 26.3, 13.9, 0, 0.2, 0], sasami: ['11228', 132, 31.7, 1.4, 0, 0.1, 0],
+    karaage: ['11289', 307, 24.2, 18.1, 13.3, 2.5, 0.8], buta_rosu: ['11124', 310, 26.7, 22.7, 0.3, 0.1, 0], buta_hiki: ['11280', 289, 25.7, 21.5, 0.1, 0.2, 0],
+    tonkatsu: ['11276', 429, 22.0, 35.9, 9.8, 0.3, 0.7], gyu_momo: ['11049', 227, 28.0, 13.2, 0.6, 0.2, 0], gyu_bara: ['11252', 451, 15.9, 44.2, 0.3, 0.2, 0],
+    sake: ['10136', 160, 29.1, 5.1, 0.1, 0.2, 0], saba: ['10156', 264, 25.2, 22.4, 0.4, 0.3, 0], sanma: ['10174', 281, 23.3, 22.8, 0.2, 0.3, 0],
+    tuna_can: ['10263', 265, 17.7, 21.7, 0.1, 0.9, 0],
+    banana: ['07107', 93, 1.1, 0.2, 22.5, 0, 1.1], ringo: ['07148', 53, 0.1, 0.2, 15.5, 0, 1.4], mikan: ['07027', 49, 0.7, 0.1, 12.0, 0, 1.0],
+    lettuce: ['06312', 11, 0.6, 0.1, 2.8, 0, 1.1], tomato: ['06182', 20, 0.7, 0.1, 4.7, 0, 1.0], kyuri: ['06065', 13, 1.0, 0.1, 3.0, 0, 1.1],
+    cabbage: ['06061', 23, 1.2, 0.1, 5.2, 0, 1.8], horenso: ['06268', 23, 2.6, 0.5, 4.0, 0, 3.6], broccoli: ['06264', 30, 3.9, 0.4, 5.2, 0, 4.3],
+    jagaimo: ['02019', 71, 1.7, 0.1, 16.9, 0, 3.1], tamanegi: ['06153', 33, 1.0, 0.1, 8.4, 0, 1.5], ninjin: ['06214', 32, 0.7, 0.2, 8.8, 0.1, 2.8],
+    daikon: ['06134', 15, 0.4, 0.1, 4.1, 0, 1.3], negi: ['06226', 35, 1.4, 0.1, 8.3, 0, 2.5], moyashi: ['06292', 12, 1.6, 0, 2.3, 0, 1.5],
+    kabocha: ['06049', 80, 1.6, 0.3, 21.3, 0, 4.1], nasu: ['06191', 18, 1.1, 0.1, 5.1, 0, 2.2], piman: ['06245', 20, 0.9, 0.2, 5.1, 0, 2.3],
+    shiitake: ['08039', 25, 3.1, 0.3, 6.4, 0, 4.9],
+    kinpira: ['18033', 84, 1.4, 4.5, 11.3, 0.9, 3.2], nikujaga: ['18036', 78, 4.3, 1.3, 13.0, 1.2, 1.3], hijiki: ['18037', 75, 3.1, 4.0, 9.9, 1.4, 3.4],
+    chikuzen: ['18035', 85, 4.4, 3.5, 10.2, 1.1, 1.8], hamburg: ['18050', 197, 13.4, 12.2, 10.0, 0.9, 1.1], korokke: ['18018', 226, 5.3, 12.6, 25.2, 0.7, 2.0],
+    ebifry: ['18020', 236, 15.9, 11.6, 20.5, 0.9, 1.0], gyoza: ['18002', 209, 6.9, 11.3, 22.3, 1.2, 1.5], shumai: ['18012', 191, 9.1, 9.2, 19.5, 1.3, 1.7],
+    chahan: ['18057', 206, 5.0, 5.2, 33.3, 1.3, 1.9], curry: ['18001', 119, 2.4, 9.0, 8.1, 1.7, 0.9],
+    coffee: ['16045', 4, 0.2, 0, 0.7, 0, 0], sencha: ['16037', 2, 0.2, 0, 0.2, 0, 0], beer: ['16006', 39, 0.3, 0, 3.1, 0, 0],
+    nihonshu: ['16001', 107, 0.4, 0, 4.9, 0, 0], wine: ['16011', 68, 0.2, 0, 1.5, 0, 0]
+  };
+
+  /* 登録する品目: key, 表示名, 1食の目安（表示）, 1食の質量 g, 検索語（読み・別名）, レシピ（省略時は key の食材を serving_g 分）
+   * 目安量は一般的な家庭の 1 人前（茶碗 1 杯 150 g、卵 1 個 50 g など）。利用者は量を g や個数で変えられる。 */
+  var ITEMS = [
+    ['gohan', 'ご飯（白米）', '茶碗1杯', 150, 'ごはん 白ごはん 白米 めし ライス'],
+    ['genmai', '玄米ご飯', '茶碗1杯', 150, 'げんまい げんまいごはん'],
+    ['okayu', 'おかゆ（全かゆ）', '茶碗1杯', 250, 'おかゆ かゆ'],
+    ['mochi', 'もち', '切り餅1個', 50, 'おもち 餅 きりもち'],
+    ['onigiri', 'おにぎり（塩むすび）', '1個', 100, 'おにぎり おむすび'],
+    ['shokupan', '食パン', '6枚切り1枚', 60, 'しょくぱん パン トースト'],
+    ['udon', 'うどん（ゆで）', '1玉', 230, 'うどん'],
+    ['soba', 'そば（ゆで）', '1玉', 180, 'そば 蕎麦'],
+    ['chuka', '中華めん（ゆで）', '1玉', 200, 'ちゅうかめん ラーメンの麺 らーめん'],
+    ['pasta', 'スパゲッティ（ゆで）', '1人前', 250, 'すぱげってぃ パスタ ぱすた'],
+    ['oatmeal', 'オートミール', '1食分', 30, 'おーとみーる'],
+    ['cornflakes', 'コーンフレーク', '1食分', 40, 'こーんふれーく シリアル'],
+    ['natto', '納豆', '1パック', 45, 'なっとう'],
+    ['tofu_momen', '木綿豆腐', '半丁', 150, 'もめんどうふ とうふ 豆腐'],
+    ['tofu_kinu', '絹ごし豆腐', '半丁', 150, 'きぬごしどうふ とうふ 豆腐'],
+    ['atsuage', '厚揚げ（生揚げ）', '半枚', 100, 'あつあげ なまあげ'],
+    ['aburaage', '油揚げ', '半枚', 15, 'あぶらあげ'],
+    ['tounyu', '豆乳（無調整）', 'コップ1杯', 200, 'とうにゅう'],
+    ['egg', '卵（生）', '1個', 50, 'たまご 生卵 鶏卵'],
+    ['egg_yude', 'ゆで卵', '1個', 50, 'ゆでたまご たまご'],
+    ['egg_medama', '目玉焼き', '1個', 55, 'めだまやき たまご'],
+    ['dashimaki', 'だし巻き卵', '1人前', 80, 'だしまきたまご たまごやき 卵焼き'],
+    ['milk', '牛乳', 'コップ1杯', 200, 'ぎゅうにゅう ミルク'],
+    ['yogurt', 'ヨーグルト（無糖）', '1食分', 100, 'よーぐると'],
+    ['cheese', 'プロセスチーズ', 'スライス1枚', 18, 'ちーず'],
+    ['tori_mune', '鶏むね肉（皮なし・焼き）', '1食分', 100, 'とりむね むねにく 鶏肉 とりにく チキン'],
+    ['tori_momo', '鶏もも肉（皮つき・焼き）', '1食分', 100, 'とりもも ももにく 鶏肉 とりにく チキン'],
+    ['sasami', 'ささみ（焼き）', '1本', 40, 'ささみ 鶏肉'],
+    ['karaage', '鶏のから揚げ', '3個', 90, 'からあげ 唐揚げ'],
+    ['buta_rosu', '豚ロース（焼き）', '1食分', 100, 'ぶたろーす 豚肉 ぶたにく ポーク'],
+    ['buta_hiki', '豚ひき肉（焼き）', '1食分', 100, 'ぶたひきにく ひき肉 豚肉'],
+    ['tonkatsu', 'とんかつ（ロース）', '1枚', 120, 'とんかつ 豚カツ'],
+    ['gyu_momo', '牛もも肉（焼き）', '1食分', 100, 'ぎゅうもも 牛肉 ぎゅうにく ビーフ'],
+    ['gyu_bara', '牛ばら肉（焼き）', '1食分', 100, 'ぎゅうばら 牛肉 ぎゅうにく カルビ'],
+    ['sake', '焼き鮭', '1切れ', 70, 'やきざけ さけ しゃけ 鮭 サーモン'],
+    ['saba', '焼きさば', '1切れ', 80, 'やきさば さば 鯖'],
+    ['sanma', '焼きさんま', '1尾', 100, 'やきさんま さんま 秋刀魚'],
+    ['tuna_can', 'ツナ缶（油漬け）', '1缶', 70, 'つなかん ツナ シーチキン'],
+    ['banana', 'バナナ', '1本', 100, 'ばなな'],
+    ['ringo', 'りんご', '半分', 125, 'りんご 林檎 アップル'],
+    ['mikan', 'みかん', '1個', 80, 'みかん 蜜柑'],
+    ['tomato', 'トマト', '1個', 150, 'とまと'],
+    ['kyuri', 'きゅうり', '1本', 100, 'きゅうり 胡瓜'],
+    ['cabbage', 'キャベツ（千切り）', '小皿1杯', 50, 'きゃべつ'],
+    ['horenso', 'ほうれん草のおひたし', '小鉢1杯', 70, 'ほうれんそう おひたし'],
+    ['broccoli', 'ブロッコリー（ゆで）', '小鉢1杯', 50, 'ぶろっこりー'],
+    ['jagaimo', 'じゃがいも（ゆで）', '1個', 100, 'じゃがいも ポテト'],
+    ['kabocha', 'かぼちゃ（ゆで）', '小鉢1杯', 80, 'かぼちゃ 南瓜'],
+    ['moyashi', 'もやし（ゆで）', '1袋の半分', 100, 'もやし'],
+    ['daikon', '大根', '1食分', 100, 'だいこん'],
+    ['salad', '野菜サラダ', '1皿', 110, 'さらだ やさいサラダ 生野菜', [['lettuce', 30], ['tomato', 50], ['kyuri', 30]]],
+    ['misoshiru', 'みそ汁（豆腐・わかめ）', 'お椀1杯', 190, 'みそしる 味噌汁 おみそしる 汁物', [['miso', 12], ['tofu_momen', 30], ['wakame', 1], ['dashi', 150]]],
+    ['misoshiru_yasai', 'みそ汁（大根・ねぎ）', 'お椀1杯', 195, 'みそしる 味噌汁 おみそしる 汁物', [['miso', 12], ['daikon', 30], ['negi', 5], ['dashi', 150]]],
+    ['tamagokake', '卵かけご飯', '茶碗1杯', 205, 'たまごかけごはん TKG', [['gohan', 150], ['egg', 50], ['shoyu', 5]]],
+    ['nattogohan', '納豆ご飯', '茶碗1杯', 195, 'なっとうごはん', [['gohan', 150], ['natto', 45]]],
+    ['curry_rice', 'カレーライス', '1皿', 380, 'かれーらいす カレー', [['gohan', 200], ['curry', 180]]],
+    ['kinpira', 'きんぴらごぼう', '小鉢1杯', 60, 'きんぴら ごぼう'],
+    ['nikujaga', '肉じゃが', '1人前', 200, 'にくじゃが'],
+    ['hijiki', 'ひじきの煮物', '小鉢1杯', 60, 'ひじき'],
+    ['chikuzen', '筑前煮', '1人前', 150, 'ちくぜんに 煮物'],
+    ['hamburg', 'ハンバーグ', '1個', 150, 'はんばーぐ'],
+    ['korokke', 'ポテトコロッケ', '1個', 70, 'ころっけ'],
+    ['ebifry', 'えびフライ', '1本', 40, 'えびふらい エビフライ'],
+    ['gyoza', '餃子', '5個', 100, 'ぎょうざ ギョーザ'],
+    ['shumai', 'しゅうまい', '5個', 100, 'しゅうまい シューマイ 焼売'],
+    ['chahan', 'チャーハン', '1皿', 250, 'ちゃーはん 炒飯 焼き飯'],
+    ['toast_butter', 'バタートースト', '6枚切り1枚', 68, 'ばたーとーすと トースト パン', [['shokupan', 60], ['butter', 8]]],
+    ['coffee', 'コーヒー（ブラック）', 'カップ1杯', 150, 'こーひー 珈琲'],
+    ['sencha', '緑茶', '湯のみ1杯', 150, 'りょくちゃ お茶 せんちゃ'],
+    ['beer', 'ビール', '缶1本', 350, 'びーる'],
+    ['nihonshu', '日本酒', '1合', 180, 'にほんしゅ 清酒'],
+    ['wine', '赤ワイン', 'グラス1杯', 120, 'わいん ワイン'],
+    ['mayo', 'マヨネーズ', '大さじ1', 12, 'まよねーず'],
+    ['butter', 'バター', '1食分', 10, 'ばたー'],
+    ['sato', '砂糖', '小さじ1', 3, 'さとう'],
+    ['shoyu', 'しょうゆ', '小さじ1', 6, 'しょうゆ 醤油'],
+    ['abura', 'サラダ油', '大さじ1', 12, 'あぶら 油 サラダ油']
+  ];
+  /* 液体（量を ml で表示し、L.isLiquid が true になるようにする。成分表の値は 100 g 当たりだが、飲料は密度≒1 として扱う） */
+  var LIQUIDS = { tounyu: 1, milk: 1, coffee: 1, sencha: 1, beer: 1, nihonshu: 1, wine: 1 };
+
+  /** 食材 key と質量 g から 5 項目＋食物繊維を計算 */
+  function nutrientsOf_(recipe) {
+    var tot = { energy_kcal: 0, protein_g: 0, fat_g: 0, carb_g: 0, salt_g: 0, fiber_g: 0 };
+    recipe.forEach(function (r) {
+      var p = PER100[r[0]];
+      if (!p) throw new Error('Foods: 未定義の食材 ' + r[0]);
+      var f = r[1] / 100;
+      tot.energy_kcal += p[1] * f; tot.protein_g += p[2] * f; tot.fat_g += p[3] * f; tot.carb_g += p[4] * f; tot.salt_g += p[5] * f; tot.fiber_g += p[6] * f;
+    });
+    tot.energy_kcal = Math.round(tot.energy_kcal);
+    ['protein_g', 'fat_g', 'carb_g', 'salt_g', 'fiber_g'].forEach(function (k) { tot[k] = L().round(tot[k], 1); });
+    return tot;
+  }
+  function rowOf_(item) {
+    var key = item[0], recipe = item[5] || [[key, item[3]]];
+    var n = nutrientsOf_(recipe);
+    var unit = LIQUIDS[key] ? 'ml' : 'g';
+    return {
+      jan: 'food:' + key, name: item[1], brand: '', quantity_text: item[2] + '（' + item[3] + unit + '）', serving_basis: 'per_serving', serving_g: item[3], package_g: null,
+      energy_kcal: n.energy_kcal, protein_g: n.protein_g, fat_g: n.fat_g, carb_g: n.carb_g, salt_g: n.salt_g, fiber_g: n.fiber_g,
+      source: 'food', verified: true
+    };
+  }
+  /** key → 検索語（名前・読み・別名） */
+  var ALIASES = {};
+  ITEMS.forEach(function (it) { ALIASES['food:' + it[0]] = (it[1] + ' ' + it[4]).toLowerCase(); });
+
+  /** ITEMS を products に登録（jan "food:<key>" で冪等。既存行は数値を更新） */
+  function setup() {
+    var now = nowIso_(), inserted = 0, updated = 0;
+    Db.withLock(function () {
+      var existing = {};
+      Db.findAll('products', function (r) { return L().isFoodJan(r.jan); }).forEach(function (r) { existing[r.jan] = r; });
+      var fresh = [];
+      ITEMS.forEach(function (it) {
+        var row = rowOf_(it);
+        var cur = existing[row.jan];
+        if (cur) {
+          Object.assign(cur, row, { updated_at: now, deleted_at: cur.deleted_at || '' });
+          Db.update('products', cur); updated++;
+        } else {
+          fresh.push(Object.assign({ id: uuid_(), created_by: '', created_at: now, updated_at: now, deleted_at: '' }, row)); inserted++;
+        }
+      });
+      Db.insertMany('products', fresh);
+    });
+    return { inserted: inserted, updated: updated, total: ITEMS.length };
+  }
+  function items() { return ITEMS.map(rowOf_); }
+  return { setup: setup, items: items, ALIASES: ALIASES, PER100: PER100, ITEMS: ITEMS, nutrientsOf_: nutrientsOf_ };
+})();
+
+/** Apps Script エディタから実行: 手料理・一般食品をマスタに登録する */
+function setupFoods() {
+  var r = Foods.setup();
+  try { console.log(JSON.stringify(r)); } catch (e) { /* noop */ }
+  return r;
+}
 
 /* ===================== External.gs ===================== */
 /* ============================================================================
@@ -1392,6 +1621,7 @@ function routes_() {
     'product.update':  { fn: Products.update,  auth: true,  write: true },
     'product.suggest': { fn: Products.suggest, auth: true,  write: true },
     'products.recent': { fn: Products.recent,  auth: true },
+    'products.search': { fn: Products.search,  auth: true },
     'ocr.parse':       { fn: Ocr.parse,        auth: true },
     'log.create':      { fn: Logs.create,      auth: true,  write: true },
     'log.update':      { fn: Logs.update,      auth: true,  write: true },
@@ -1432,7 +1662,7 @@ function handleRequest_(method, params, token) {
 
 /** Apps Script エディタから実行: 全モジュールが読み込まれているか・共通ロジックが動くかを確認する（貼り付けミスの検出用） */
 function selfCheck() {
-  var modules = ['PittoLogic', 'Db', 'Auth', 'Products', 'External', 'Logs', 'Summary', 'Profile', 'Sync', 'Ocr'];
+  var modules = ['PittoLogic', 'Db', 'Auth', 'Products', 'Foods', 'External', 'Logs', 'Summary', 'Profile', 'Sync', 'Ocr'];
   var missing = modules.filter(function (m) { try { return typeof eval(m) !== 'object' && typeof eval(m) !== 'function'; } catch (e) { return true; } });
   var T = PittoLogic.computeTargets({ sex: 'm', birth_year: 1986, weight_kg: 70, activity_level: 'normal' }, 2026);
   var result = {
@@ -1442,6 +1672,7 @@ function selfCheck() {
     tables: Object.keys(Db.SCHEMA),
     auth_mode: prop_('AUTH_MODE', 'google'),
     properties_set: ['GOOGLE_CLIENT_ID', 'CLAUDE_API_KEY', 'GEMINI_API_KEY', 'YAHOO_CLIENT_ID', 'ALLOWED_EMAILS', 'ADMIN_EMAILS', 'SPREADSHEET_ID'].filter(function (k) { return !!prop_(k); }),
+    foods_registered: (function () { try { return Db.findAll('products', function (r) { return r.source === 'food' && !r.deleted_at; }).length; } catch (e) { return -1; } })(),
     timezone: TZ, today: todayJst_()
   };
   result.ok = result.modules_ok && result.logic_ok;

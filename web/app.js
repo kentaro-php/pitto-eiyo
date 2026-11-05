@@ -5,7 +5,7 @@
   var cfg = window.PITTO_CONFIG || {};
   var $ = function (id) { return document.getElementById(id); };
   var NUT = L.LABELS, MEALS = L.MEALS, BASIS_NAME = L.BASIS_NAME;
-  var VIEWS = ['home', 'scan', 'product', 'register', 'month', 'goal'];
+  var VIEWS = ['home', 'scan', 'search', 'product', 'register', 'month', 'goal'];
 
   /* ---------- 小物 ---------- */
   function todayStr() { return L.dateStr(new Date()); }
@@ -17,6 +17,7 @@
   function sourceTag(p, short) {
     if (p.source === 'off') return '<span class="tag off">' + (short ? 'OFF' : 'Open Food Facts') + '</span>';
     if (p.source === 'web') return '<span class="tag web">' + (short ? 'ウェブ' : 'ウェブ検索・要確認') + '</span>';
+    if (p.source === 'food') return '<span class="tag off">' + (short ? '成分表' : '食品標準成分表（八訂）') + '</span>';
     return '';
   }
   function toast(msg) { var t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2600); }
@@ -129,6 +130,7 @@
     var v = state.view;
     if (v === 'home') renderHome();
     if (v === 'scan') renderScan();
+    if (v === 'search') renderSearch();
     if (v === 'product') renderProduct();
     if (v === 'register') renderRegister();
     if (v === 'month') renderMonth();
@@ -218,6 +220,57 @@
   $('go-scan').addEventListener('click', function () { goto('scan'); });
   $('go-manual').addEventListener('click', function () { state.noCamera = true; goto('scan'); setTimeout(function () { $('jan-input').focus(); }, 50); });
   $('go-recent').addEventListener('click', function () { state.noCamera = true; goto('scan'); setTimeout(function () { $('recent-list').scrollIntoView({ block: 'start' }); }, 50); });
+  $('go-search').addEventListener('click', function () { goto('search'); });
+
+  /* ---------- 料理・食品の検索 ---------- */
+  var searchTimer = null, searchSeq = 0, lastSearched = '';
+  function renderSearch() {
+    var q = $('search-input').value.trim();
+    if (q && q !== lastSearched) runSearch(q); else if (!q) { $('search-list').innerHTML = ''; lastSearched = ''; }
+    setTimeout(function () { $('search-input').focus(); }, 50);
+  }
+  function foodItemHtml(p) {
+    return '<button type="button" class="item" data-pid="' + esc(p.id) + '"><span class="name">' + esc(p.name) + sourceTag(p, true) + '<div class="sub">' + esc(p.quantity_text || '') + (p.quantity_text ? ' · ' : '') + BASIS_NAME[p.serving_basis] + 'あたり ' + fmt(p.energy_kcal, 0) + ' kcal</div></span><span class="val">›</span></button>';
+  }
+  function localSearch(q) {
+    var nq = L.normSearchText(q);
+    return Object.keys(Store.S.products).map(function (id) { return Store.S.products[id]; }).filter(function (p) { return L.normSearchText(p.name).indexOf(nq) >= 0; }).slice(0, 10);
+  }
+  async function runSearch(q) {
+    var seq = ++searchSeq;
+    var local = localSearch(q);
+    if (!Api.isConfigured() || !online()) {
+      $('search-list').innerHTML = local.length ? local.map(foodItemHtml).join('') : '<p class="hint">オフラインのため、端末に残っている商品だけ検索しています。</p>';
+      return;
+    }
+    $('search-status').innerHTML = '<span class="spin"></span>検索中…';
+    try {
+      var data = await Api.request('products.search', { q: q, limit: 30 });
+      if (seq !== searchSeq) return;
+      data.products.forEach(function (p) { Store.upsertProduct(p); });
+      Store.save();
+      $('search-list').innerHTML = data.products.length ? data.products.map(foodItemHtml).join('') : '<p class="hint">見つかりませんでした。別の言い方（例: ごはん → 白米）で試すか、「バーコードを読む」から商品を登録してください。</p>';
+      setMsg('search-status', data.products.length ? data.total + ' 件' : '');
+      lastSearched = q;
+    } catch (e) {
+      if (seq !== searchSeq) return;
+      $('search-list').innerHTML = local.map(foodItemHtml).join('');
+      setMsg('search-status', Api.isNetworkError(e) ? '通信できませんでした。端末内の商品だけ表示しています。' : (e.message || '検索に失敗しました。'), 'err');
+      handleApiError(e, { silent: true });
+    }
+  }
+  $('search-input').addEventListener('input', function () {
+    var q = this.value.trim();
+    clearTimeout(searchTimer);
+    if (!q) { $('search-list').innerHTML = ''; setMsg('search-status', ''); return; }
+    searchTimer = setTimeout(function () { runSearch(q); }, 300);
+  });
+  $('search-input').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(searchTimer); var q = this.value.trim(); if (q) runSearch(q); } });
+  $('search-back').addEventListener('click', function () { goto('home'); });
+  $('search-list').addEventListener('click', function (e) {
+    var it = e.target.closest('[data-pid]'); if (!it) return;
+    var p = Store.productById(it.getAttribute('data-pid')); if (p) openProduct(p, true);
+  });
 
   /* ---------- スキャン ---------- */
   function recentProducts() {
@@ -305,7 +358,8 @@
       else { setScanStatus(e.message || '照会に失敗しました。', 'err'); }
     } finally { lookupBusy = false; }
   }
-  function openProduct(p) {
+  function openProduct(p, fromSearch) {
+    state.fromSearch = !!fromSearch;
     state.product = p;
     state.amount = L.defaultAmount(p);
     state.meal = L.mealByHour(new Date().getHours());
@@ -329,7 +383,7 @@
   function renderProduct() {
     var p = state.product; if (!p) return;
     $('p-name').innerHTML = esc(p.name) + sourceTag(p, false) + (p.verified ? '<span class="tag">確認済み</span>' : '');
-    $('p-sub').textContent = (p.brand ? p.brand + ' · ' : '') + (p.quantity_text ? p.quantity_text + ' · ' : '') + 'JAN ' + p.jan + ' · ' + BASIS_NAME[p.serving_basis] + (p.serving_basis !== 'per_100g' && p.serving_g ? '（' + fmt(p.serving_g, 0) + (L.isLiquid(p) ? 'ml' : 'g') + '）' : '') + 'あたりの表示';
+    $('p-sub').textContent = (p.brand ? p.brand + ' · ' : '') + (p.quantity_text ? p.quantity_text + ' · ' : '') + (p.source === 'food' ? '' : 'JAN ' + p.jan + ' · ') + BASIS_NAME[p.serving_basis] + (p.serving_basis !== 'per_100g' && p.serving_g ? '（' + fmt(p.serving_g, 0) + (L.isLiquid(p) ? 'ml' : 'g') + '）' : '') + 'あたりの表示';
     var opts = amountOptions(p);
     if (!opts.length) { state.amount = L.defaultAmount(p); }
     $('amount-chips').innerHTML = opts.map(function (o) {
@@ -373,7 +427,7 @@
     Array.prototype.forEach.call($('meal-chips').querySelectorAll('.chip'), function (x) { x.setAttribute('aria-pressed', String(x === c)); });
   });
   $('log-date').addEventListener('change', function () { state.keepDate = true; renderProductTable(); });
-  $('product-back').addEventListener('click', function () { state.noCamera = true; goto('scan'); });
+  $('product-back').addEventListener('click', function () { if (state.fromSearch) { state.fromSearch = false; goto('search'); return; } state.noCamera = true; goto('scan'); });
   $('p-edit').addEventListener('click', function () { if (!state.product) return; state.editId = state.product.id; state.jan = state.product.jan; goto('register'); });
   $('log-save').addEventListener('click', async function () {
     var p = state.product; if (!p) return;

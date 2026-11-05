@@ -252,3 +252,50 @@ test('ウェブ照会（Claude web_search をモック）: 自動保存 / 要確
   const capped = gas2.call('product.get', { jan: LOW_JAN, external: '1' }).data;
   assert.match(capped.lookup_error, /上限/);
 });
+
+test('手料理・一般食品: setupFoods / products.search / 記録', () => {
+  const gas = createGas({ fetch: () => { throw new Error('no network'); } });
+  const r = gas.run('setupFoods');
+  assert.equal(r.inserted, r.total); assert.equal(r.updated, 0); assert.ok(r.total >= 70);
+  const again = gas.run('setupFoods');
+  assert.equal(again.inserted, 0); assert.equal(again.updated, r.total, '2 回目は更新だけ');
+  assert.equal(gas.sheet('products').getLastRow(), r.total + 1);
+  // ご飯 茶碗1杯 150g = 八訂 01088 の 1.5 倍
+  const gohan = gas.call('products.search', { q: 'ごはん' }).data;
+  assert.ok(gohan.products.length >= 1, JSON.stringify(gohan));
+  const g = gohan.products.find(p => p.name === 'ご飯（白米）');
+  assert.ok(g); assert.equal(g.source, 'food'); assert.equal(g.serving_basis, 'per_serving'); assert.equal(g.serving_g, 150);
+  assert.equal(g.energy_kcal, 234); assert.equal(g.protein_g, 3.8); assert.equal(g.fat_g, 0.5); assert.equal(g.carb_g, 55.7); assert.equal(g.salt_g, 0); assert.equal(g.jan, 'food:gohan');
+  // 読み・カタカナ・別名で引ける（カタカナ → ひらがな）
+  assert.ok(gas.call('products.search', { q: 'ライス' }).data.products.some(p => p.jan === 'food:gohan'));
+  assert.ok(gas.call('products.search', { q: '味噌汁' }).data.products.some(p => p.jan === 'food:misoshiru'));
+  assert.ok(gas.call('products.search', { q: 'チキン' }).data.products.some(p => p.jan === 'food:tori_mune'));
+  assert.equal(gas.call('products.search', { q: '' }).error.code, 'validation');
+  // みそ汁（豆腐・わかめ）はレシピ合算: みそ12 + 木綿豆腐30 + わかめ1 + だし150
+  const miso = gas.call('products.search', { q: 'みそしる' }).data.products.find(p => p.jan === 'food:misoshiru');
+  assert.equal(miso.energy_kcal, 48); assert.equal(miso.salt_g, 1.8); assert.equal(miso.protein_g, 4.2);
+  // 記録: 1食 / 半分 / 100g
+  const c1 = gas.call('log.create', { client_id: 'f1', product_id: g.id, date: TODAY, time: '07:30', meal_type: 'breakfast', amount_mode: 'serving', amount: 1 });
+  assert.equal(c1.ok, true, JSON.stringify(c1)); assert.equal(c1.data.log.energy_kcal, 234); assert.equal(c1.data.log.amount_label, '1食');
+  const c2 = gas.call('log.create', { client_id: 'f2', product_id: g.id, date: TODAY, time: '12:30', amount_mode: 'grams', amount: 200 });
+  assert.equal(c2.data.log.energy_kcal, 312);
+  // 修正は管理者のみ（本人作成ではないので一般ユーザーは修正提案になる）。food: の jan は検証を通る
+  const u = gas.call('product.update', { id: g.id, name: 'ご飯（白米）', serving_basis: 'per_serving', serving_g: 160, energy_kcal: 250 });
+  assert.equal(u.ok, true, JSON.stringify(u)); assert.equal(u.data.applied, false);
+  gas.state.props.ADMIN_EMAILS = 'dev@example.com';
+  const u2 = gas.call('product.update', { id: g.id, name: 'ご飯（白米）', serving_basis: 'per_serving', serving_g: 160, energy_kcal: 250 });
+  assert.equal(u2.data.applied, true); assert.equal(u2.data.product.serving_g, 160);
+  // setupFoods を再実行すると標準値に戻る
+  gas.run('setupFoods');
+  assert.equal(gas.call('products.search', { q: 'ごはん' }).data.products.find(p => p.jan === 'food:gohan').serving_g, 150);
+  // 疑似 JAN は product.create では作れない（setupFoods 専用）
+  assert.equal(gas.call('product.create', { jan: 'food:evil', name: 'x', serving_basis: 'per_serving', serving_g: 1, energy_kcal: 1 }).error.code, 'validation');
+  // 空白入りの検索語、液体は ml 表記
+  assert.ok(gas.call('products.search', { q: 'みそ 汁' }).data.products.some(p => p.jan === 'food:misoshiru'));
+  const milk = gas.call('products.search', { q: '牛乳' }).data.products.find(p => p.jan === 'food:milk');
+  assert.equal(milk.quantity_text, 'コップ1杯（200ml）'); assert.equal(gas.call('log.create', { client_id: 'f3', product_id: milk.id, date: TODAY, amount_mode: 'grams', amount: 100 }).data.log.amount_label, '100ml');
+  // バーコード照会は food: の行に影響しない
+  assert.equal(gas.get({ action: 'product.get', jan: '4901234567894' }).data.product, null);
+  const check = gas.run('selfCheck');
+  assert.equal(check.ok, true); assert.equal(check.foods_registered, r.total);
+});

@@ -49,6 +49,7 @@
         <button class="btn soft" type="button" id="go-manual">JANを入力</button>
         <button class="btn soft" type="button" id="go-recent">最近の商品</button>
       </div>
+      <button class="btn soft" type="button" id="go-search">料理・食品を検索（ご飯・みそ汁など）</button>
     </div>
     <div class="card">
       <div class="row"><h2>記録</h2><span class="hint" id="home-sync"></span></div>
@@ -82,6 +83,18 @@
     <div class="card">
       <h2>最近の商品</h2>
       <div class="list" id="recent-list"></div>
+    </div>
+  </section>
+
+  <section id="view-search" class="view" hidden>
+    <div class="topbar"><button class="back" type="button" id="search-back">← 戻る</button><h1>料理・食品を検索</h1><span></span></div>
+    <div class="card">
+      <div class="field">
+        <label for="search-input">料理名・食品名（例: ご飯、みそ汁、納豆、鶏むね）</label>
+        <input class="input" id="search-input" type="search" placeholder="例: ごはん" autocomplete="off" enterkeyhint="search">
+      </div>
+      <p class="hint" id="search-status">ご飯・みそ汁などの手料理は、文部科学省「日本食品標準成分表（八訂）」の値を 1 食の目安量で登録しています。</p>
+      <div class="list" id="search-list"></div>
     </div>
   </section>
 

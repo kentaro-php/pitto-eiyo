@@ -45,6 +45,7 @@ pitto-eiyo/
 | F1 バーコード読取（連続読取・手入力） | `web/scanner.js`。BarcodeDetector 対応端末はそれを使い、iOS Safari など未対応端末は ZXing で中央の帯を 1 秒に約 6 回デコード。同じ値が 2 回続いたら確定。写真からの読取と 13 桁手入力も可 |
 | F2〜F6 商品表示・記録・日次/月次集計・総括判定 | `shared/logic.js` + `gas/Logs.gs` `gas/Summary.gs`。判定の表・総括文のテンプレートは設計書 8 節どおり |
 | F7 目標設定 | `computeTargets`（基礎代謝基準値 × 体重 × 身体活動レベル、PFC バランス、食塩目標、高血圧オプション、手動上書き、増減 kcal） |
+| F13 手料理・一般食品の入力 | ホームの「料理・食品を検索」で、ご飯・みそ汁・納豆・焼き鮭など約 80 品を名前・読みで検索して記録（`gas/Foods.gs`）。値は文部科学省「日本食品標準成分表（八訂）増補2023年」の 100 g 当たりに 1 食の目安量（茶碗 1 杯 150 g など）を掛けたもの。みそ汁・カレーライス・卵かけご飯などは食材の分量から合算。`setupFoods` で登録・更新 |
 | F8 未登録商品のフォールバック | 自前マスタ → Open Food Facts → Yahoo!（商品名のみ）→ ウェブ照会（Claude の web_search / web_fetch でメーカー・通販ページの商品名と栄養成分表示を読む。確からしければ `source=web` で自動保存、そうでなければ登録フォームの初期値）→ OCR 登録 / 手入力。登録した商品は共有マスタに蓄積（`source` 列で区別） |
 | F9 認証 | Google ログイン（GIS）→ ID トークンを GAS で検証（`aud` 確認、Cache に有効期限まで保存） |
 | F10 履歴編集・修正提案 | 記録の消去、商品情報の修正（登録者本人・管理者は反映、それ以外は `product_suggestions` に提案として保存） |
@@ -92,7 +93,7 @@ pitto-eiyo/
 | `APP_USER_AGENT` | | Open Food Facts へ送る User-Agent（既定 `PittoEiyo/1.0 (GAS)`） |
 
 6. 「デプロイ → 新しいデプロイ → ウェブアプリ」。**実行ユーザー: 自分**、**アクセスできるユーザー: 全員（匿名ユーザーを含む）** で公開し、表示された `https://script.google.com/macros/s/.../exec` を控える。
-7. 夜間の再計算を使う場合はエディタで `setupNightlyTrigger` を一度実行する（毎日 3 時に全日次サマリを再計算）。
+7. 手料理・一般食品を使うにはエディタで `setupFoods` を一度実行する（products に `source=food` の行が約 80 件入る。再実行すると標準値に戻る）。夜間の再計算を使う場合はエディタで `setupNightlyTrigger` を一度実行する（毎日 3 時に全日次サマリを再計算）。
 
 動作確認: ブラウザで `…/exec?action=health` を開くと `{"ok":true,...}` が返る。
 

@@ -95,6 +95,7 @@ var Products = (function () {
   function create(params, ctx) {
     var input = params.product || params;
     var norm = L().normalizeProduct(input);
+    if (L().isFoodJan(norm.jan)) throw new ApiError('validation', '手料理・一般食品は setupFoods で登録します。', { field: 'jan' });
     var existing = byJan(norm.jan);
     if (existing) return { product: pub(existing), created: false };
     var now = nowIso_();
@@ -133,6 +134,30 @@ var Products = (function () {
     return { suggestion_id: row.id };
   }
 
+  /** POST products.search { q, limit } — 名前・読みで商品マスタを検索（手料理・一般食品の入力用）。
+   *  手料理（source=food）は Foods.ALIASES の読み・別名でも一致させる。前方一致 → 部分一致、手料理 → それ以外の順 */
+  function search(params, ctx) {
+    var q = normText_(params.q);
+    if (!q) throw new ApiError('validation', '検索語を入力してください。', { field: 'q' });
+    if (q.length > 40) q = q.slice(0, 40);
+    var limit = Math.min(50, Math.max(1, Number(params.limit) || 30));
+    var hits = [];
+    Db.findAll('products', function (r) { return !r.deleted_at; }).forEach(function (r) {
+      var name = normText_(r.name), alias = normText_(Foods.ALIASES[r.jan] || '');
+      var score = -1;
+      if (name.indexOf(q) === 0) score = 0;
+      else if (name.indexOf(q) >= 0) score = 1;
+      else if (aliasWords_(r.jan).some(function (w) { return w.indexOf(q) === 0; })) score = 2;
+      else if (alias.indexOf(q) >= 0) score = 3;
+      if (score < 0) return;
+      hits.push({ r: r, s: score + (r.source === 'food' ? 0 : 10) });
+    });
+    hits.sort(function (a, b) { return a.s - b.s || str_(a.r.name).localeCompare(str_(b.r.name), 'ja'); });
+    return { products: hits.slice(0, limit).map(function (h) { return pub(h.r); }), total: hits.length };
+  }
+  function normText_(s) { return L().normSearchText(s); }
+  function aliasWords_(jan) { return str_(Foods.ALIASES[jan] || '').split(' ').map(normText_).filter(Boolean); }
+
   /** POST products.recent — 本人が最近記録した／登録した商品（スキャン無しで再記録するため） */
   function recent(params, ctx) {
     var limit = Math.min(50, Math.max(1, Number(params.limit) || 30));
@@ -161,5 +186,5 @@ var Products = (function () {
     } catch (e) { try { console.warn('画像の保存に失敗: ' + e); } catch (e2) { /* noop */ } }
   }
 
-  return { pub: pub, byId: byId, byJan: byJan, get: get, create: create, update: update, suggest: suggest, recent: recent, recentForUser: recentForUser };
+  return { pub: pub, byId: byId, byJan: byJan, get: get, create: create, update: update, suggest: suggest, search: search, recent: recent, recentForUser: recentForUser };
 })();

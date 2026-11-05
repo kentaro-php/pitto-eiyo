@@ -46,6 +46,7 @@ function routes_() {
     'product.update':  { fn: Products.update,  auth: true,  write: true },
     'product.suggest': { fn: Products.suggest, auth: true,  write: true },
     'products.recent': { fn: Products.recent,  auth: true },
+    'products.search': { fn: Products.search,  auth: true },
     'ocr.parse':       { fn: Ocr.parse,        auth: true },
     'log.create':      { fn: Logs.create,      auth: true,  write: true },
     'log.update':      { fn: Logs.update,      auth: true,  write: true },
@@ -86,7 +87,7 @@ function handleRequest_(method, params, token) {
 
 /** Apps Script エディタから実行: 全モジュールが読み込まれているか・共通ロジックが動くかを確認する（貼り付けミスの検出用） */
 function selfCheck() {
-  var modules = ['PittoLogic', 'Db', 'Auth', 'Products', 'External', 'Logs', 'Summary', 'Profile', 'Sync', 'Ocr'];
+  var modules = ['PittoLogic', 'Db', 'Auth', 'Products', 'Foods', 'External', 'Logs', 'Summary', 'Profile', 'Sync', 'Ocr'];
   var missing = modules.filter(function (m) { try { return typeof eval(m) !== 'object' && typeof eval(m) !== 'function'; } catch (e) { return true; } });
   var T = PittoLogic.computeTargets({ sex: 'm', birth_year: 1986, weight_kg: 70, activity_level: 'normal' }, 2026);
   var result = {
@@ -96,6 +97,7 @@ function selfCheck() {
     tables: Object.keys(Db.SCHEMA),
     auth_mode: prop_('AUTH_MODE', 'google'),
     properties_set: ['GOOGLE_CLIENT_ID', 'CLAUDE_API_KEY', 'GEMINI_API_KEY', 'YAHOO_CLIENT_ID', 'ALLOWED_EMAILS', 'ADMIN_EMAILS', 'SPREADSHEET_ID'].filter(function (k) { return !!prop_(k); }),
+    foods_registered: (function () { try { return Db.findAll('products', function (r) { return r.source === 'food' && !r.deleted_at; }).length; } catch (e) { return -1; } })(),
     timezone: TZ, today: todayJst_()
   };
   result.ok = result.modules_ok && result.logic_ok;

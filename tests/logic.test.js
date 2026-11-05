@@ -102,3 +102,10 @@ test('normalizeProduct / normalizeProfile', () => {
   assert.equal(pr.activity_level, 'high'); assert.equal(pr.htn, true); assert.equal(pr.target_mode, 'auto');
   assert.throws(() => L.normalizeProfile({ target_mode: 'manual' }), /目標カロリー/);
 });
+
+test('isFoodJan / normJan / normSearchText', () => {
+  assert.equal(L.isFoodJan('food:gohan'), true); assert.equal(L.isFoodJan('4901234567894'), false); assert.equal(L.isFoodJan('food:Bad Key'), false);
+  assert.equal(L.normJan('food:gohan'), 'food:gohan'); assert.equal(L.normJan('4901-2345-67894'), '4901234567894');
+  assert.equal(L.normSearchText(' ミソ 汁 ABC'), 'みそ汁abc');
+  assert.equal(L.normalizeProduct({ jan: 'food:gohan', name: 'ご飯', serving_basis: 'per_serving', serving_g: 150, energy_kcal: 234 }).jan, 'food:gohan');
+});
