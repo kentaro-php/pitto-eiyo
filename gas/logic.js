@@ -246,8 +246,8 @@
   /** 商品登録フォーム / API の入力を検証して正規化する。失敗は ValidationError */
   function normalizeProduct(input) {
     input = input || {};
-    var jan = normJan(input.jan);
-    if (!eanValid(jan)) throw new ValidationError('JANコードが正しくありません。', 'jan');
+    var jan = /^food:[a-z0-9_]+$/.test(String(input.jan || '')) ? String(input.jan) : normJan(input.jan);
+    if (jan.indexOf('food:') !== 0 && !eanValid(jan)) throw new ValidationError('JANコードが正しくありません。', 'jan');
     var name = String(input.name || '').trim();
     if (!name) throw new ValidationError('商品名を入力してください。', 'name');
     if (name.length > 120) throw new ValidationError('商品名が長すぎます。', 'name');

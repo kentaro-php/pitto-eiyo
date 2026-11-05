@@ -8,7 +8,7 @@ const path = require('path');
 const vm = require('vm');
 const crypto = require('crypto');
 
-const FILE_ORDER = ['logic.js', 'Util.gs', 'Db.gs', 'Auth.gs', 'Products.gs', 'External.gs', 'Logs.gs', 'Summary.gs', 'Profile.gs', 'Sync.gs', 'Ocr.gs', 'Code.gs'];
+const FILE_ORDER = ['logic.js', 'Util.gs', 'Db.gs', 'Auth.gs', 'Products.gs', 'Foods.gs', 'External.gs', 'Logs.gs', 'Summary.gs', 'Profile.gs', 'Sync.gs', 'Ocr.gs', 'Code.gs'];
 
 function formatDate(date, tz, pattern) {
   const parts = {};

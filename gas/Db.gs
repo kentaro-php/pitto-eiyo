@@ -62,7 +62,7 @@ var Db = (function () {
     if (BOOL_COLS[col]) return truthy_(v);
     if (TEXT_COLS[col] || DATE_COLS[col]) {
       var s = String(v);
-      if (col === 'jan') s = PittoLogic.normJan(s);
+      if (col === 'jan' && s.indexOf('food:') !== 0) s = PittoLogic.normJan(s); // food:<key> は手料理の疑似 JAN
       return s;
     }
     return v;
