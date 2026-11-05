@@ -607,6 +607,10 @@ var Products = (function () {
     return Db.findOne('products', function (r) { return r.id === id && !r.deleted_at; });
   }
   function byJan(jan) { return Db.findOne('products', function (r) { return r.jan === jan && !r.deleted_at; }); }
+  /** 手入力商品（custom:）は登録した本人と管理者にだけ見せる。他は全員に見える */
+  function canSee(p, ctx) { return !!p && (!L().isCustomJan(p.jan) || (ctx && (ctx.isAdmin || (ctx.user && p.created_by === ctx.user.id)))); }
+  /** id で引き、見えない商品は無いものとして扱う（他人の手入力商品の内容を id 指定で取り出させない） */
+  function visibleById(id, ctx) { var p = byId(id); return canSee(p, ctx) ? p : null; }
 
   /** GET/POST product.get { jan, external=1 } — 認証不要。外部でヒットした商品はマスタに保存して返す
    *  照会順: 自前マスタ → Open Food Facts → Yahoo!（商品名）→ ウェブ照会（商品名＋栄養成分。token でログイン済みのときだけ）。
@@ -698,7 +702,7 @@ var Products = (function () {
   /** POST product.update — 登録者本人か管理者ならその場で修正、それ以外は修正提案として記録 */
   function update(params, ctx) {
     var input = params.product || params;
-    var existing = byId(input.id || params.id);
+    var existing = visibleById(input.id || params.id, ctx);
     if (!existing) throw new ApiError('not_found', '商品が見つかりません。');
     var norm = L().normalizeProduct(Object.assign({}, input, { jan: existing.jan }));
     var canEdit = ctx.isAdmin || (existing.created_by && existing.created_by === ctx.user.id);
@@ -715,12 +719,29 @@ var Products = (function () {
 
   /** POST product.suggest — 修正提案（v1.1: 管理者がシート上で確認して反映する） */
   function suggest(params, ctx) {
-    var product = byId(params.product_id);
+    var product = visibleById(params.product_id, ctx);
     if (!product) throw new ApiError('not_found', '商品が見つかりません。');
     var fields = params.fields && typeof params.fields === 'object' ? params.fields : {};
     var row = { id: uuid_(), product_id: product.id, user_id: ctx.user.id, fields_json: JSON.stringify(fields), note: str_(params.note).slice(0, 500), status: 'open', created_at: nowIso_() };
     Db.insert('product_suggestions', row);
     return { suggestion_id: row.id };
+  }
+
+  /** POST product.delete — 手入力商品（custom:）を登録した本人（または管理者）が消す（論理削除。既存の記録は商品名を保持しているので残る） */
+  function remove(params, ctx) {
+    var p = visibleById(params.id, ctx);
+    if (!p) throw new ApiError('not_found', '商品が見つかりません。');
+    if (!L().isCustomJan(p.jan)) throw new ApiError('forbidden', '削除できるのは手入力で登録した商品だけです。');
+    p.deleted_at = nowIso_(); p.updated_at = p.deleted_at;
+    Db.update('products', p);
+    return { deleted: true, id: p.id };
+  }
+  /** 退会時: 本人の手入力商品を物理削除する（店名・料理名など本人の情報を残さない）。消した行数を返す */
+  function purgeCustomOf(userId) {
+    var ids = {};
+    Db.findAll('products', function (r) { return L().isCustomJan(r.jan) && r.created_by === userId; }).forEach(function (r) { ids[r.id] = true; });
+    var images = Object.keys(ids).length ? Db.deleteWhere('product_images', function (r) { return !!ids[r.product_id]; }) : 0;
+    return { products: Db.deleteWhere('products', function (r) { return !!ids[r.id]; }), images: images };
   }
 
   /** POST products.search { q, limit } — 名前・読みで商品マスタを検索（手料理・一般食品の入力用）。
@@ -740,7 +761,8 @@ var Products = (function () {
       else if (aliasWords_(r.jan).some(function (w) { return w.indexOf(q) === 0; })) score = 2;
       else if (alias.indexOf(q) >= 0) score = 3;
       if (score < 0) return;
-      hits.push({ r: r, s: score + (r.source === 'food' ? 0 : 10) });
+      // 並び: 本人の手入力商品（再記録が目的）→ 標準成分表 → 共有マスタ
+      hits.push({ r: r, s: score + (L().isCustomJan(r.jan) ? -10 : r.source === 'food' ? 0 : 10) });
     });
     hits.sort(function (a, b) { return a.s - b.s || str_(a.r.name).localeCompare(str_(b.r.name), 'ja'); });
     return { products: hits.slice(0, limit).map(function (h) { return pub(h.r); }), total: hits.length };
@@ -776,7 +798,7 @@ var Products = (function () {
     } catch (e) { try { console.warn('画像の保存に失敗: ' + e); } catch (e2) { /* noop */ } }
   }
 
-  return { pub: pub, byId: byId, byJan: byJan, get: get, create: create, update: update, suggest: suggest, search: search, recent: recent, recentForUser: recentForUser };
+  return { pub: pub, byId: byId, byJan: byJan, canSee: canSee, visibleById: visibleById, get: get, create: create, update: update, suggest: suggest, remove: remove, purgeCustomOf: purgeCustomOf, search: search, recent: recent, recentForUser: recentForUser };
 })();
 
 /* ===================== Foods.gs ===================== */
@@ -1198,7 +1220,7 @@ var Logs = (function () {
     if (!clientId || clientId.length > 64) throw new ApiError('validation', 'client_id が必要です。', { field: 'client_id' });
     var dup = Db.findOne('food_logs', function (r) { return r.user_id === user.id && r.client_id === clientId; });
     if (dup) return { log: pub(dup), daily_summary: Summary.getOrCompute(user, dup.date), duplicate: true };
-    var product = Products.byId(params.product_id);
+    var product = Products.visibleById(params.product_id, ctx);
     if (!product) throw new ApiError('not_found', '商品が見つかりません。', { field: 'product_id' });
     var v = validateCommon_(params, null);
     var factor = L().factorFor(product, v.amount_mode, v.amount);
@@ -1414,7 +1436,7 @@ var Profile = (function () {
     else { r = Object.assign({ user_id: ctx.user.id }, norm); Db.insert('user_profiles', r); }
     return { profile: pub(r), targets: L().computeTargets(r, currentYearJst_()) };
   }
-  /** POST account.delete — 本人の記録・サマリ・プロフィール・ユーザー行を物理削除する（共有の商品マスタは残す） */
+  /** POST account.delete — 本人の記録・サマリ・プロフィール・ユーザー行・手入力商品（custom:）を物理削除する（共有の商品マスタは残す） */
   function deleteAccount(params, ctx) {
     if (str_(params.confirm) !== 'DELETE') throw new ApiError('validation', '確認文字列 confirm: "DELETE" が必要です。');
     var id = ctx.user.id;
@@ -1424,6 +1446,7 @@ var Profile = (function () {
       summaries: Db.deleteWhere('daily_summaries', byUser),
       profile: Db.deleteWhere('user_profiles', byUser),
       suggestions: Db.deleteWhere('product_suggestions', byUser),
+      custom_products: Products.purgeCustomOf(id),
       user: Db.deleteWhere('users', function (r) { return r.id === id; })
     };
     try { CacheService.getScriptCache().remove('user:' + id); } catch (e) { /* noop */ }
@@ -1628,6 +1651,7 @@ function routes_() {
     'product.create':  { fn: Products.create,  auth: true,  write: true },
     'product.update':  { fn: Products.update,  auth: true,  write: true },
     'product.suggest': { fn: Products.suggest, auth: true,  write: true },
+    'product.delete':  { fn: Products.remove,  auth: true,  write: true },
     'products.recent': { fn: Products.recent,  auth: true },
     'products.search': { fn: Products.search,  auth: true },
     'ocr.parse':       { fn: Ocr.parse,        auth: true },

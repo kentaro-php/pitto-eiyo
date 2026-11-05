@@ -45,6 +45,7 @@ function routes_() {
     'product.create':  { fn: Products.create,  auth: true,  write: true },
     'product.update':  { fn: Products.update,  auth: true,  write: true },
     'product.suggest': { fn: Products.suggest, auth: true,  write: true },
+    'product.delete':  { fn: Products.remove,  auth: true,  write: true },
     'products.recent': { fn: Products.recent,  auth: true },
     'products.search': { fn: Products.search,  auth: true },
     'ocr.parse':       { fn: Ocr.parse,        auth: true },

@@ -375,7 +375,8 @@
   /* ---------- 商品カード ---------- */
   function amountOptions(p) {
     var modes = L.availableModes(p), opts = [];
-    if (modes.indexOf('package') >= 0) opts.push(['package', 1, '1個'], ['package', 0.5, '半分'], ['package', 2, '2個']);
+    // 1食あたり表示で内容量の総量が無いときは「1個」=「1食」なので、重複する個数チップは出さない
+    if (modes.indexOf('package') >= 0 && !(p.serving_basis === 'per_serving' && !(p.package_g > 0))) opts.push(['package', 1, '1個'], ['package', 0.5, '半分'], ['package', 2, '2個']);
     if (modes.indexOf('serving') >= 0 && p.serving_basis === 'per_serving') opts.push(['serving', 1, '1食'], ['serving', 0.5, '半分'], ['serving', 2, '2食']);
     if (modes.indexOf('grams') >= 0) {
       var u = L.isLiquid(p) ? 'ml' : 'g';
@@ -389,6 +390,7 @@
     var p = state.product; if (!p) return;
     $('p-name').innerHTML = esc(p.name) + sourceTag(p, false) + (p.verified ? '<span class="tag">確認済み</span>' : '');
     $('p-sub').textContent = (p.brand ? p.brand + ' · ' : '') + (p.quantity_text ? p.quantity_text + ' · ' : '') + (L.isPseudoJan(p.jan) ? '' : 'JAN ' + p.jan + ' · ') + BASIS_NAME[p.serving_basis] + (p.serving_basis !== 'per_100g' && p.serving_g ? '（' + fmt(p.serving_g, 0) + (L.isLiquid(p) ? 'ml' : 'g') + '）' : '') + 'あたりの表示';
+    $('p-delete').hidden = !L.isCustomJan(p.jan);
     var opts = amountOptions(p);
     if (!opts.length) { state.amount = L.defaultAmount(p); }
     $('amount-chips').innerHTML = opts.map(function (o) {
@@ -433,6 +435,18 @@
   });
   $('log-date').addEventListener('change', function () { state.keepDate = true; renderProductTable(); });
   $('product-back').addEventListener('click', function () { if (state.fromSearch) { state.fromSearch = false; goto('search'); return; } if (state.product && L.isCustomJan(state.product.jan)) { goto('home'); return; } state.noCamera = true; goto('scan'); });
+  $('p-delete').addEventListener('click', async function () {
+    var p = state.product; if (!p || !L.isCustomJan(p.jan)) return;
+    if (!confirm('「' + p.name + '」を削除しますか？（これまでの記録は残ります）')) return;
+    if (!Api.isConfigured() || !online()) { toast('削除には通信が必要です'); return; }
+    var btn = $('p-delete'); btn.disabled = true;
+    try {
+      await Api.request('product.delete', { id: p.id });
+      Store.removeProduct(p.id); Store.save();
+      state.product = null; state.fromSearch = false;
+      toast('手入力商品を削除しました'); goto('home');
+    } catch (e) { handleApiError(e); } finally { btn.disabled = false; }
+  });
   $('p-edit').addEventListener('click', function () { if (!state.product) return; state.editId = state.product.id; state.jan = state.product.jan; goto('register'); });
   $('log-save').addEventListener('click', async function () {
     var p = state.product; if (!p) return;

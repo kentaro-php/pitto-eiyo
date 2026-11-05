@@ -24,7 +24,7 @@ var Profile = (function () {
     else { r = Object.assign({ user_id: ctx.user.id }, norm); Db.insert('user_profiles', r); }
     return { profile: pub(r), targets: L().computeTargets(r, currentYearJst_()) };
   }
-  /** POST account.delete — 本人の記録・サマリ・プロフィール・ユーザー行を物理削除する（共有の商品マスタは残す） */
+  /** POST account.delete — 本人の記録・サマリ・プロフィール・ユーザー行・手入力商品（custom:）を物理削除する（共有の商品マスタは残す） */
   function deleteAccount(params, ctx) {
     if (str_(params.confirm) !== 'DELETE') throw new ApiError('validation', '確認文字列 confirm: "DELETE" が必要です。');
     var id = ctx.user.id;
@@ -34,6 +34,7 @@ var Profile = (function () {
       summaries: Db.deleteWhere('daily_summaries', byUser),
       profile: Db.deleteWhere('user_profiles', byUser),
       suggestions: Db.deleteWhere('product_suggestions', byUser),
+      custom_products: Products.purgeCustomOf(id),
       user: Db.deleteWhere('users', function (r) { return r.id === id; })
     };
     try { CacheService.getScriptCache().remove('user:' + id); } catch (e) { /* noop */ }

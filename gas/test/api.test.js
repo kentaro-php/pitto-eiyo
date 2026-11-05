@@ -330,4 +330,33 @@ test('バーコードの無い商品の手入力登録（custom:）: 採番 / �
   assert.equal(g2.call('products.search', { q: 'らーめん' }, 'good').data.products.length, 1);
   assert.equal(g2.call('products.search', { q: 'らーめん' }, 'good2').data.products.length, 0);
   assert.equal(g2.call('products.recent', {}, 'good2').data.products.length, 0);
+  // id を知っていても他人の手入力商品は取り出せない・記録できない（update / suggest / log.create）
+  const mid = mine.data.product.id;
+  assert.equal(g2.call('product.update', { id: mid, name: 'x', serving_basis: 'per_serving', energy_kcal: 1 }, 'good2').error.code, 'not_found');
+  assert.equal(g2.call('product.suggest', { product_id: mid, fields: {} }, 'good2').error.code, 'not_found');
+  assert.equal(g2.call('log.create', { client_id: 'x1', product_id: mid, date: TODAY, amount_mode: 'serving', amount: 1 }, 'good2').error.code, 'not_found');
+  assert.equal(g2.call('product.delete', { id: mid }, 'good2').error.code, 'not_found');
+  // 本人は削除できる（論理削除。記録は商品名を保持して残る）。共有商品は削除不可
+  assert.equal(g2.call('log.create', { client_id: 'x2', product_id: mid, date: TODAY, amount_mode: 'serving', amount: 1 }, 'good').ok, true);
+  assert.equal(g2.call('product.delete', { id: mid }, 'good').data.deleted, true);
+  assert.equal(g2.call('products.search', { q: 'らーめん' }, 'good').data.products.length, 0);
+  assert.equal(g2.call('logs.list', { from: TODAY, to: TODAY }, 'good').data.logs[0].product_name, '社食のラーメン');
+  assert.equal(g2.call('product.delete', { id: mid }, 'good').error.code, 'not_found', '削除済みは見えない');
+  const shared = g2.call('product.create', { jan: '4901234567894', name: '共有の商品', serving_basis: 'per_package', serving_g: 100, energy_kcal: 100 }, 'good').data.product;
+  assert.equal(g2.call('product.delete', { id: shared.id }, 'good').error.code, 'forbidden');
+  // 退会すると本人の手入力商品は物理削除される（共有商品は残る）
+  g2.call('product.create', { jan: 'custom:new', name: '社食の定食', serving_basis: 'per_serving', energy_kcal: 700 }, 'good');
+  const del = g2.call('account.delete', { confirm: 'DELETE' }, 'good');
+  assert.equal(del.ok, true, JSON.stringify(del)); assert.equal(del.data.deleted.custom_products.products, 2, '論理削除済みの行も含めて物理削除');
+  assert.equal(g2.sheet('products').rows.slice(1).filter(r => String(r[1]).startsWith('custom:')).length, 0);
+  assert.equal(g2.sheet('products').rows.slice(1).filter(r => r[1] === 4901234567894 || r[1] === '4901234567894').length, 1);
+});
+
+test('検索の並び: 本人の手入力商品 → 標準成分表 → 共有マスタ', () => {
+  const gas = createGas({ fetch: fetchMock });
+  gas.run('setupFoods');
+  gas.call('product.create', { jan: '4901234567894', name: 'ごはんパック', serving_basis: 'per_package', serving_g: 200, energy_kcal: 300 });
+  gas.call('product.create', { jan: 'custom:new', name: 'ごはん（実家の炊き込み）', serving_basis: 'per_serving', energy_kcal: 250 });
+  const r = gas.call('products.search', { q: 'ごはん' }).data.products;
+  assert.match(r[0].jan, /^custom:/); assert.equal(r[1].source, 'food'); assert.equal(r[r.length - 1].name, 'ごはんパック');
 });

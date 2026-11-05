@@ -62,7 +62,7 @@ pitto-eiyo/
 4. **ウェブ照会**（`CLAUDE_API_KEY` があるとき。`gas/External.gs` の `webLookup`）— Claude Messages API に `web_search` / `web_fetch` を渡し、メーカー公式・通販ページの商品名と栄養成分表示を JSON で読む。5 項目そろって信頼度 0.7 以上なら `source=web` で保存して即表示、それ以外は登録フォームの初期値（黄色＝要確認、出典リンク付き）。ログイン済みの呼び出しだけ実行、同じ JAN は 6 時間キャッシュ、`WEB_LOOKUP_DAILY_LIMIT`（既定 100 回／日）で停止。**有料**（検索 1 回 $0.01 ×最大 4 ＋トークン代。1 JAN あたり数円〜十数円。2 回目以降はマスタから無料）
 5. それでも無ければ **登録フォーム** — 栄養成分表示を撮影して OCR（`CLAUDE_API_KEY`、または `OCR_PROVIDER=gemini` と `GEMINI_API_KEY`）か手入力
 
-バーコードが無い・読めない商品（パン屋・お惣菜・外食など）は、ホームまたはスキャン画面の「手入力で登録」から名前と栄養成分（熱量だけでも可）を登録します。JAN の代わりに `custom:<id>` をサーバが振り（`shared/logic.js` の `isCustomJan`）、`source` は `manual` / `ocr`。**登録した本人の検索・最近の商品にだけ出ます**（`products.search` と `products.recent` が `created_by` で絞る）。
+バーコードが無い・読めない商品（パン屋・お惣菜・外食など）は、ホームまたはスキャン画面の「手入力で登録」から名前と栄養成分（熱量だけでも可）を登録します。JAN の代わりに `custom:<id>` をサーバが振り（`shared/logic.js` の `isCustomJan`）、`source` は `manual` / `ocr`。**登録した本人の検索・最近の商品にだけ出ます**（`products.search` と `products.recent` が `created_by` で絞り、`product.update` / `product.suggest` / `log.create` も id を知っていても他人の行は `not_found`）。検索では本人の手入力商品 → 標準成分表 → 共有マスタの順。保存するたびに新しい行になるので、不要になったら商品カードの「この手入力商品を削除」で消す（`product.delete`、論理削除。過去の記録は商品名を保持して残る）。退会時は本人の手入力商品を物理削除する。
 
 手料理・一般食品（ご飯・みそ汁など約 80 品）は **文部科学省「日本食品標準成分表（八訂）増補2023年」第2章** の可食部 100 g 当たりの値（食品番号を `gas/Foods.gs` の `PER100` に併記）に、一般的な 1 食の目安量（茶碗 1 杯 150 g、卵 1 個 50 g、お椀 1 杯など）を掛けたものです。みそ汁・カレーライス・卵かけご飯・野菜サラダなどは `RECIPES`（食材と g）から合算しています。出典: https://www.mext.go.jp/a_menu/syokuhinseibun/mext_00001.html （政府標準利用規約 2.0）。
 
@@ -97,7 +97,7 @@ pitto-eiyo/
 | F2〜F6 商品表示・記録・日次/月次集計・総括判定 | `shared/logic.js` + `gas/Logs.gs` `gas/Summary.gs`。判定の表・総括文のテンプレートは設計書 8 節どおり |
 | F7 目標設定 | `computeTargets`（基礎代謝基準値 × 体重 × 身体活動レベル、PFC バランス、食塩目標、高血圧オプション、手動上書き、増減 kcal） |
 | F13 手料理・一般食品の入力 | ホームの「料理・食品を検索」で、ご飯・みそ汁・納豆・焼き鮭など約 80 品を名前・読みで検索して記録（`gas/Foods.gs`）。値は文部科学省「日本食品標準成分表（八訂）増補2023年」の 100 g 当たりに 1 食の目安量（茶碗 1 杯 150 g など）を掛けたもの。みそ汁・カレーライス・卵かけご飯などは食材の分量から合算。`setupFoods` で登録・更新 |
-| F14 バーコードの無い商品の手入力 | ホーム／スキャン画面の「手入力で登録」。名前と栄養成分（熱量だけでも可）を入れると JAN の代わりに `custom:<id>` が振られ、本人の検索・最近の商品から再記録できる。栄養成分表示の撮影（OCR）も使える |
+| F14 バーコードの無い商品の手入力 | ホーム／スキャン画面の「手入力で登録」。名前と栄養成分（熱量だけでも可）を入れると JAN の代わりに `custom:<id>` が振られ、本人の検索・最近の商品から再記録できる（他人には見えない）。栄養成分表示の撮影（OCR）も使える。不要になったら商品カードから削除（`product.delete`）、退会時は物理削除 |
 | F8 未登録商品のフォールバック | 自前マスタ → Open Food Facts → Yahoo!（商品名のみ）→ ウェブ照会（Claude の web_search / web_fetch でメーカー・通販ページの商品名と栄養成分表示を読む。確からしければ `source=web` で自動保存、そうでなければ登録フォームの初期値）→ OCR 登録 / 手入力。登録した商品は共有マスタに蓄積（`source` 列で区別） |
 | F9 認証 | Google ログイン（GIS）→ ID トークンを GAS で検証（`aud` 確認、Cache に有効期限まで保存） |
 | F10 履歴編集・修正提案 | 記録の消去、商品情報の修正（登録者本人・管理者は反映、それ以外は `product_suggestions` に提案として保存） |
@@ -186,11 +186,11 @@ npm run bundle       # gas/bundle/Code.gs（1 ファイル版）を生成
 | --- | --- | --- |
 | `health` | 不要 | 疎通確認 |
 | `product.get` (GET 可) | 不要 | `jan`, `external=1` で OFF 照会。見つかればマスタに保存して返す |
-| `product.create` / `product.update` / `product.suggest` / `products.recent` | 要 | 商品マスタ |
+| `product.create` / `product.update` / `product.suggest` / `product.delete` / `products.recent` | 要 | 商品マスタ（`product.delete` は本人の手入力商品のみ） |
 | `ocr.parse` | 要 | `image_base64`, `media_type` → 栄養成分（`confidence` 付き） |
 | `log.create` / `log.update` / `log.delete` / `logs.list` | 要 | 記録（`client_id` で冪等）。応答に更新後の日次サマリ |
 | `summary.daily` / `summary.monthly` | 要 | 集計（判定込み） |
-| `profile.get` / `profile.update` / `account.delete` | 要 | 目標・退会（`confirm: "DELETE"`） |
+| `profile.get` / `profile.update` / `account.delete` | 要 | 目標・退会（`confirm: "DELETE"`。本人の記録・手入力商品を物理削除） |
 | `sync.bootstrap` | 要 | 起動時の一括取得（プロフィール・目標・直近の記録・最近の商品） |
 
 応答は常に `{ "ok": true, "data": … }` または `{ "ok": false, "error": { "code", "message" } }`。主な `code`: `unauthorized` / `forbidden` / `not_found` / `validation` / `busy` / `rate_limited` / `upstream` / `ocr_refused` / `internal`。
