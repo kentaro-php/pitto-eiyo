@@ -4,7 +4,7 @@ window.PITTO_CONFIG = {
   apiUrl: 'https://script.google.com/macros/s/AKfycbxxeVEy6ixqorZ1ik0P4b07Yt_IkWNW1zK2yz3G0FAcFw5c-NnZRt2HHBMS65h0M8Zl/exec',
   /* Google Cloud の OAuth 2.0 クライアントID（ウェブ アプリケーション）。
    * 空のままだと「開発モード」になり、ログイン無しで devToken を送る（GAS 側も AUTH_MODE=dev にする） */
-  googleClientId: '',
+  googleClientId: '834946049175-l1aige2n9m96hrak8p1jqapd5nst3so5.apps.googleusercontent.com',
   devToken: 'dev',
   appName: 'ピッと栄養',
   version: '1.0.0',
