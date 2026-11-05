@@ -495,14 +495,17 @@ var Db = (function () {
     return rows.length - keep.length;
   }
   /** 書き込みの直列化。入れ子で呼ばれても二重取得しない */
-  function withLock(fn) {
-    if (lockDepth_ > 0) return fn();
+  function withLock(fn) { return lock_(fn, 20000, true); }
+  /** 待たずにロックを試し、取れなければ何もしない（任意の書き込み用。戻り値は { done, value }） */
+  function tryWithLock(fn) { var r = lock_(fn, 0, false); return r; }
+  function lock_(fn, waitMs, throwIfBusy) {
+    if (lockDepth_ > 0) return throwIfBusy ? fn() : { done: true, value: fn() };
     var lock = LockService.getScriptLock();
     var got = false;
-    try { got = lock.tryLock(20000); } catch (e) { got = false; }
-    if (!got) throw new ApiError('busy', '混み合っています。少し待ってからもう一度お試しください。');
+    try { got = lock.tryLock(waitMs); } catch (e) { got = false; }
+    if (!got) { if (throwIfBusy) throw new ApiError('busy', '混み合っています。少し待ってからもう一度お試しください。'); return { done: false, value: null }; }
     lockDepth_++;
-    try { return fn(); }
+    try { var v = fn(); return throwIfBusy ? v : { done: true, value: v }; }
     finally { lockDepth_--; try { lock.releaseLock(); } catch (e) { /* noop */ } }
   }
   /** ログインしたユーザーの行を用意する（初回は作成、退会済みなら復活）。結果はキャッシュして毎回の読み出しを省く */
@@ -522,7 +525,7 @@ var Db = (function () {
     });
     cache.put(key, '1', 21600);
   }
-  return { SCHEMA: SCHEMA, setup: setup, readAll: readAll, findAll: findAll, findOne: findOne, insert: insert, insertMany: insertMany, update: update, deleteWhere: deleteWhere, withLock: withLock, ensureUser: ensureUser };
+  return { SCHEMA: SCHEMA, setup: setup, readAll: readAll, findAll: findAll, findOne: findOne, insert: insert, insertMany: insertMany, update: update, deleteWhere: deleteWhere, withLock: withLock, tryWithLock: tryWithLock, ensureUser: ensureUser };
 })();
 
 /** Apps Script エディタから一度実行: 全テーブルのタブを作成する */
@@ -592,17 +595,27 @@ var Auth = (function () {
     checkAllowed_(user);
     return user;
   }
-  /** 最終利用日を 1 日 1 回だけ更新する（読み出し API のたびにシートへ書かないため） */
+  /** 最終利用日を 1 日 1 回だけ更新する（読み出し API のたびにシートへ書かないため）。
+   *  認証段階（ロック外）から呼ばれるので、ロックを待たずに試し、取れなければ次回に回す（退会の deleteWhere と重ならないように） */
   function touchSession_(row) {
     var today = nowIso_().slice(0, 10);
     if (str_(row.last_used_at).slice(0, 10) === today) return;
-    try { row.last_used_at = nowIso_(); Db.update('sessions', row); } catch (e) { /* noop */ }
+    try {
+      Db.tryWithLock(function () {
+        var fresh = Db.findOne('sessions', function (r) { return r.id === row.id && !r.deleted_at; });
+        if (!fresh) return;
+        fresh.last_used_at = nowIso_(); Db.update('sessions', fresh);
+      });
+    } catch (e) { /* noop */ }
   }
-  /** POST auth.session — Google の ID トークン（または有効なセッション）で認証済みの利用者に長期セッションを発行する */
+  /** POST auth.session — Google の ID トークンで認証済みの利用者に長期セッションを発行する。
+   *  セッショントークンからの再発行は不可（漏れたトークンで期限を無限に延ばせないように） */
   function createSession(params, ctx) {
+    if (isSessionToken(params && params.token)) throw new ApiError('forbidden', 'セッションの再発行には Google ログインが必要です。');
     var token = SESSION_PREFIX + (uuid_() + uuid_()).replace(/-/g, '');
     var now = nowIso_();
     var exp = Utilities.formatDate(new Date(Date.now() + sessionDays_() * 86400000), TZ, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
+    cleanupSessions_();
     Db.insert('sessions', { id: sessionId_(token), user_id: ctx.user.id, email: ctx.user.email || '', display_name: ctx.user.name || '', picture: ctx.user.picture || '', created_at: now, expires_at: exp, last_used_at: now, deleted_at: '' });
     return { session: token, expires_at: exp, days: sessionDays_(), user: { id: ctx.user.id, email: ctx.user.email, name: ctx.user.name } };
   }
@@ -615,6 +628,11 @@ var Auth = (function () {
     if (row) { row.deleted_at = nowIso_(); Db.update('sessions', row); }
     try { CacheService.getScriptCache().remove('sess:' + id); } catch (e) { /* noop */ }
     return { revoked: !!row };
+  }
+  /** 発行のついでに、無効化済み・期限切れのセッション行を物理削除する（溜まり続けないように） */
+  function cleanupSessions_() {
+    var now = Date.now();
+    try { Db.deleteWhere('sessions', function (r) { return !!r.deleted_at || !(new Date(r.expires_at).getTime() > now); }); } catch (e) { /* noop */ }
   }
   /** 退会時: 本人のセッションをすべて物理削除し、キャッシュも消す */
   function purgeSessionsOf(userId) {

@@ -387,12 +387,21 @@ test('長期セッション: auth.session で交換 / 以後 ID トークン無�
   assert.equal(gas.call('auth.signout', { token: 'good' }, 'good').data.revoked, false, 'ID トークンのログアウトは何もしない');
   // 退会でセッション行が物理削除される
   const t2 = gas.call('auth.session', {}, 'good').data.session;
-  const t3 = gas.call('auth.session', {}, t2).data.session; // セッションからの再発行も可
+  assert.equal(gas.call('auth.session', {}, t2).error.code, 'forbidden', 'セッションから再発行はできない（漏れたトークンで期限を延ばせない）');
+  const t3 = gas.call('auth.session', {}, 'good').data.session;
   assert.equal(gas.call('profile.get', {}, t3).ok, true);
+  // 発行のついでに無効化済み（tok）の行は掃除されている
+  assert.equal(gas.sheet('sessions').rows.slice(1).filter(r => r[0] && r[8]).length, 0, '無効化済みの行は残らない');
   const del = gas.call('account.delete', { confirm: 'DELETE' }, t3);
-  assert.equal(del.ok, true, JSON.stringify(del)); assert.equal(del.data.deleted.sessions, 3, '無効化済みを含む本人の全セッション');
+  assert.equal(del.ok, true, JSON.stringify(del)); assert.equal(del.data.deleted.sessions, 2, '本人の有効な全セッション');
   assert.equal(gas.sheet('sessions').rows.slice(1).filter(r => r[0]).length, 0);
   assert.equal(gas.call('profile.get', {}, t2).error.code, 'unauthorized');
+  // 最終利用日は 1 日 1 回、ロックを待たずに更新（取れなければ次回）
+  const g3 = createGas({ fetch: fetchMock, properties: { AUTH_MODE: 'google', GOOGLE_CLIENT_ID: 'client-123' } });
+  const t4 = g3.call('auth.session', {}, 'good').data.session;
+  g3.sheet('sessions').rows[1][7] = '2020-01-01T00:00:00.000+09:00';
+  assert.equal(g3.call('profile.get', {}, t4).ok, true);
+  assert.ok(new Date(g3.sheet('sessions').rows[1][7]).getTime() > Date.now() - 60000, 'last_used_at が今に更新');
   // dev モードでは従来どおり
   const dev = createGas({ fetch: fetchMock });
   assert.equal(dev.call('auth.session', {}).ok, true);

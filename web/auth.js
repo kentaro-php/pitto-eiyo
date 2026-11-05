@@ -36,7 +36,7 @@ window.PittoAuth = (function () {
   }
   function expire() {
     if (state.mode === 'dev') return;
-    state.token = null; state.exp = 0; save();
+    state.token = null; state.exp = 0; state.kind = ''; save();
     state.message = 'ログインの有効期限が切れました。もう一度ログインしてください。';
     emit();
     prompt();
@@ -61,9 +61,24 @@ window.PittoAuth = (function () {
       var exp = Date.parse(r.expires_at) / 1000;
       if (!(exp > Date.now() / 1000 + 60)) return;
       state.token = r.session; state.exp = exp; state.kind = 'session';
-      save(); scheduleExpiry();
+      save(); scheduleExpiry(); emit();
     }).catch(function () { /* 旧 API など。従来どおり 1 時間で再ログイン */ });
   }
+  /* オフライン等でサーバ側の無効化に失敗したセッションは控えておき、次回起動・復帰時に再送する */
+  var REVOKE_KEY = 'pitto.auth.revoke.v1';
+  function pendingRevokes() { try { return JSON.parse(localStorage.getItem(REVOKE_KEY) || '[]'); } catch (e) { return []; } }
+  function setPendingRevokes(list) { try { if (list.length) localStorage.setItem(REVOKE_KEY, JSON.stringify(list.slice(-10))); else localStorage.removeItem(REVOKE_KEY); } catch (e) { /* noop */ } }
+  function revoke(token) {
+    if (!revoker || !token) return;
+    Promise.resolve().then(function () { return revoker(token); })
+      .then(function () { setPendingRevokes(pendingRevokes().filter(function (t) { return t !== token; })); })
+      .catch(function (e) {
+        // 通信できなかったときだけ再送対象にする（unauthorized＝もう無効なら消す）
+        if (e && (e.code === 'network' || e.code === 'bad_response')) { var l = pendingRevokes(); if (l.indexOf(token) < 0) l.push(token); setPendingRevokes(l); }
+        else setPendingRevokes(pendingRevokes().filter(function (t) { return t !== token; }));
+      });
+  }
+  function retryRevokes() { pendingRevokes().forEach(revoke); }
   function whenGisReady(fn) {
     var tries = 0;
     (function poll() {
@@ -96,11 +111,12 @@ window.PittoAuth = (function () {
       if (!isValid()) prompt();
     });
     document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && state.ready && !isValid() && state.exp) expire(); });
+    window.addEventListener('online', retryRevokes);
+    setTimeout(retryRevokes, 1500);
   }
   function signOut() {
     try { if (window.google && google.accounts && google.accounts.id) google.accounts.id.disableAutoSelect(); } catch (e) { /* noop */ }
-    var revoke = state.kind === 'session' && state.token && revoker ? revoker(state.token) : null; // サーバ側のセッションも無効化
-    if (revoke && revoke.catch) revoke.catch(function () { /* noop */ });
+    if (state.kind === 'session' && state.token) { var l = pendingRevokes(); if (l.indexOf(state.token) < 0) l.push(state.token); setPendingRevokes(l); revoke(state.token); } // サーバ側のセッションも無効化（失敗したら次回再送）
     state.token = null; state.user = null; state.exp = 0; state.message = ''; state.kind = '';
     try { localStorage.removeItem(KEY); } catch (e) { /* noop */ }
     emit();
@@ -108,7 +124,7 @@ window.PittoAuth = (function () {
   var revoker = null; // function(sessionToken) → Promise
   return {
     init: init, isValid: isValid, signOut: signOut, expire: expire, renderButton: renderButton, prompt: prompt,
-    setSessionHandlers: function (ex, rv) { exchanger = ex; revoker = rv; },
+    setSessionHandlers: function (ex, rv) { exchanger = ex; revoker = rv; }, retryRevokes: retryRevokes,
     kind: function () { return state.kind; }, expiresAt: function () { return state.exp; },
     token: function () { return isValid() ? state.token : null; },
     user: function () { return state.user; }, mode: function () { return state.mode; }, message: function () { return state.message; }

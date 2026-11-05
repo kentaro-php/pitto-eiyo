@@ -131,7 +131,7 @@ pitto-eiyo/
 | `AUTH_MODE` | | `google`（既定）または `dev`。`dev` は自分専用の動作確認用。公開前に必ず `google` にする |
 | `GOOGLE_CLIENT_ID` | google のとき必須 | OAuth 2.0 クライアント ID（下記 3） |
 | `ALLOWED_EMAILS` / `ALLOWED_DOMAINS` | | カンマ区切り。設定すると、それ以外のアカウントは利用不可（テスター限定公開に） |
-| `SESSION_DAYS` | | ログイン後にログイン不要でいられる日数（既定 `90`、最大 365）。全員を強制ログアウトしたいときは `sessions` タブの行を消す |
+| `SESSION_DAYS` | | ログイン後にログイン不要でいられる日数（既定 `90`、最大 365）。全員を強制ログアウトしたいときは `sessions` タブの行を消す（キャッシュの関係で最大 15 分は残る） |
 | `ADMIN_EMAILS` | | 管理者。商品情報をその場で修正でき、登録した商品が「確認済み」になる |
 | `CLAUDE_API_KEY` | OCR・ウェブ照会を使うなら | Anthropic の API キー。モデルは `CLAUDE_MODEL`（既定 `claude-opus-5-5`） |
 | `WEB_LOOKUP` | | 未登録 JAN の商品名と栄養成分を Claude の web_search / web_fetch で調べる（既定 `1`。`0` で無効）。`CLAUDE_API_KEY` が必要。1 回あたり検索 $0.01 ×最大4 ＋トークン代。同じ JAN は 6 時間キャッシュ |
