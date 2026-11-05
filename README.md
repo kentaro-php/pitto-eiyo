@@ -38,6 +38,53 @@ pitto-eiyo/
 └─ scripts/             共通ロジックの同期、アイコン生成
 ```
 
+## 全体像と更新のしかた（次に手を入れる人へ）
+
+### どこに何があるか
+
+| 層 | 場所 | 中身 | 更新のしかた |
+| --- | --- | --- | --- |
+| フロント（PWA） | `web/` → GitHub Pages `https://kentaro-php.github.io/pitto-eiyo/` | 画面・バーコード読取・端末キャッシュ・Google ログイン | `main` に入ると `.github/workflows/pages.yml` が 1〜2 分で公開。`web/app.js` などを変えたら **`web/sw.js` の `VERSION` も上げる**（上げないと既存端末に新しい JS が配られない） |
+| API | `gas/` → Apps Script プロジェクト「ピッと栄養 API」（スプレッドシートに紐づく） | 認証・商品マスタ・記録・集計・外部照会・OCR | 正本は GitHub。変更後に `npm run bundle` → `gas/bundle/Code.gs` を Apps Script の `コード.gs` に全文貼り直し →「デプロイ → デプロイを管理 → 鉛筆 → バージョン: 新バージョン → デプロイ」。**「新しいデプロイ」は使わない**（exec URL が変わり `web/config.js` の書き換えが必要になる） |
+| 共通ロジック | `shared/logic.js` | 目標算出・判定・換算・JAN 検証・検索語の正規化。純粋関数のみ | ここだけを編集し `npm run sync` で `web/logic.js` と `gas/logic.js` にコピー（直接編集しない） |
+| データ | Google スプレッドシート「ピッと栄養 DB」（7 タブ、`gas/Db.gs` の `SCHEMA` が列定義） | users / user_profiles / products / food_logs / daily_summaries / product_images / product_suggestions | 列を増やすときは `SCHEMA` 末尾に追加し、既存シートにも手で列を足す。削除は `deleted_at` を入れる論理削除 |
+| 設定・鍵 | Apps Script「プロジェクトの設定 → スクリプト プロパティ」 | API キー・クライアント ID・利用者制限・機能スイッチ（下の表） | コミットしない。保存した瞬間から有効で再デプロイ不要 |
+| 標準食品データ | `gas/Foods.gs` | 手料理・一般食品の定義（八訂の 100 g 値＋1 食の目安量＋レシピ） | 品目を足したら bundle → 貼り直し → `setupFoods` を再実行（冪等。既存行は標準値に戻る） |
+
+### 商品データの出どころ（照会順）
+
+バーコードを読むと `product.get` が次の順に探し、見つかった時点で返します。
+
+1. **自前の商品マスタ**（`products` タブ）— 一度見つかった商品は全員で共有。`source` 列で出どころを区別
+   - `manual` 手入力 / `ocr` 栄養成分表示の写真から / `off` Open Food Facts / `web` ウェブ照会 / `food` 標準成分表（手料理）
+2. **Open Food Facts API v2**（無料・ODbL）— 日本の商品はほぼ無い。100 g 当たりで保存
+3. **Yahoo!ショッピング 商品検索 API**（`YAHOO_CLIENT_ID` があるとき）— 商品名のみ
+4. **ウェブ照会**（`CLAUDE_API_KEY` があるとき。`gas/External.gs` の `webLookup`）— Claude Messages API に `web_search` / `web_fetch` を渡し、メーカー公式・通販ページの商品名と栄養成分表示を JSON で読む。5 項目そろって信頼度 0.7 以上なら `source=web` で保存して即表示、それ以外は登録フォームの初期値（黄色＝要確認、出典リンク付き）。ログイン済みの呼び出しだけ実行、同じ JAN は 6 時間キャッシュ、`WEB_LOOKUP_DAILY_LIMIT`（既定 100 回／日）で停止。**有料**（検索 1 回 $0.01 ×最大 4 ＋トークン代。1 JAN あたり数円〜十数円。2 回目以降はマスタから無料）
+5. それでも無ければ **登録フォーム** — 栄養成分表示を撮影して OCR（`CLAUDE_API_KEY`、または `OCR_PROVIDER=gemini` と `GEMINI_API_KEY`）か手入力
+
+手料理・一般食品（ご飯・みそ汁など約 80 品）は **文部科学省「日本食品標準成分表（八訂）増補2023年」第2章** の可食部 100 g 当たりの値（食品番号を `gas/Foods.gs` の `PER100` に併記）に、一般的な 1 食の目安量（茶碗 1 杯 150 g、卵 1 個 50 g、お椀 1 杯など）を掛けたものです。みそ汁・カレーライス・卵かけご飯・野菜サラダなどは `RECIPES`（食材と g）から合算しています。出典: https://www.mext.go.jp/a_menu/syokuhinseibun/mext_00001.html （政府標準利用規約 2.0）。
+
+### 変更の手順（毎回同じ）
+
+1. GitHub Issue を立てる → ブランチを切る → 変更 → `npm test`（Node のモックで GAS API のシナリオテストが走る）→ 必要なら `npm run sync` と `npm run bundle` → PR
+2. レビュー（Codex）→ マージ
+3. `web/` の変更は Actions が自動公開。スマホは PWA を開き直す（`sw.js` の `VERSION` を上げてあれば自動で入れ替わる）
+4. `gas/` の変更は上の表のとおり Apps Script に貼り直して **新バージョン**でデプロイ。`selfCheck` を実行して `"ok":true` を確認
+5. データ移行が要るもの（`setupFoods` など）は、その関数をエディタから実行
+
+### 日常の確認ポイント
+
+- `exec?action=health` が `{"ok":true,...}`、Apps Script「実行数」にエラーが無いか
+- `products` の `source=web` 行（AI 取得・要確認）と `product_suggestions`（他ユーザーからの修正提案）を月 1 回眺めて、変な値は「商品情報を修正」で直す（`ADMIN_EMAILS` に入っていればその場で反映）
+- ウェブ照会の回数は `WEB_LOOKUP_COUNT`（`yyyy-MM-dd:n`）、費用は Anthropic Console の Usage
+- 他人に URL を渡す前に `DEBUG=0`、`AUTH_MODE=google`、`ALLOWED_EMAILS` を確認
+
+### 更新履歴
+
+- 2026-11-05 初期セットアップ（スプレッドシート・GAS v1・GitHub Pages・Google ログイン）。リポジトリは Pages のため public
+- 2026-11-05 PR #1 ウェブ照会（未登録 JAN の商品名・栄養成分を Claude の web_search / web_fetch で取得）。GAS v2
+- 2026-11-05 PR #2 手料理・一般食品の検索（八訂ベース 77 品、`setupFoods`、`products.search`）。GAS v3→v4（レビュー対応）
+
 ## 設計書との対応
 
 | 設計書 | 実装 |
