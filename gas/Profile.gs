@@ -35,6 +35,7 @@ var Profile = (function () {
       profile: Db.deleteWhere('user_profiles', byUser),
       suggestions: Db.deleteWhere('product_suggestions', byUser),
       custom_products: Products.purgeCustomOf(id),
+      sessions: Auth.purgeSessionsOf(id),
       user: Db.deleteWhere('users', function (r) { return r.id === id; })
     };
     try { CacheService.getScriptCache().remove('user:' + id); } catch (e) { /* noop */ }

@@ -16,7 +16,8 @@ var Db = (function () {
       'energy_kcal', 'protein_g', 'fat_g', 'carb_g', 'salt_g', 'created_at', 'updated_at', 'deleted_at'],
     daily_summaries: ['user_id', 'date', 'energy_kcal', 'protein_g', 'fat_g', 'carb_g', 'salt_g', 'log_count', 'verdict_json', 'updated_at'],
     product_images: ['id', 'product_id', 'drive_file_id', 'kind', 'created_by', 'created_at'],
-    product_suggestions: ['id', 'product_id', 'user_id', 'fields_json', 'note', 'status', 'created_at']
+    product_suggestions: ['id', 'product_id', 'user_id', 'fields_json', 'note', 'status', 'created_at'],
+    sessions: ['id', 'user_id', 'email', 'display_name', 'picture', 'created_at', 'expires_at', 'last_used_at', 'deleted_at']
   };
   /* 読み出し時に必ず文字列として扱う列（シートが数値や日付に自動変換しても元に戻す） */
   var TEXT_COLS = {};
@@ -128,14 +129,17 @@ var Db = (function () {
     return rows.length - keep.length;
   }
   /** 書き込みの直列化。入れ子で呼ばれても二重取得しない */
-  function withLock(fn) {
-    if (lockDepth_ > 0) return fn();
+  function withLock(fn) { return lock_(fn, 20000, true); }
+  /** 待たずにロックを試し、取れなければ何もしない（任意の書き込み用。戻り値は { done, value }） */
+  function tryWithLock(fn) { var r = lock_(fn, 0, false); return r; }
+  function lock_(fn, waitMs, throwIfBusy) {
+    if (lockDepth_ > 0) return throwIfBusy ? fn() : { done: true, value: fn() };
     var lock = LockService.getScriptLock();
     var got = false;
-    try { got = lock.tryLock(20000); } catch (e) { got = false; }
-    if (!got) throw new ApiError('busy', '混み合っています。少し待ってからもう一度お試しください。');
+    try { got = lock.tryLock(waitMs); } catch (e) { got = false; }
+    if (!got) { if (throwIfBusy) throw new ApiError('busy', '混み合っています。少し待ってからもう一度お試しください。'); return { done: false, value: null }; }
     lockDepth_++;
-    try { return fn(); }
+    try { var v = fn(); return throwIfBusy ? v : { done: true, value: v }; }
     finally { lockDepth_--; try { lock.releaseLock(); } catch (e) { /* noop */ } }
   }
   /** ログインしたユーザーの行を用意する（初回は作成、退会済みなら復活）。結果はキャッシュして毎回の読み出しを省く */
@@ -155,7 +159,7 @@ var Db = (function () {
     });
     cache.put(key, '1', 21600);
   }
-  return { SCHEMA: SCHEMA, setup: setup, readAll: readAll, findAll: findAll, findOne: findOne, insert: insert, insertMany: insertMany, update: update, deleteWhere: deleteWhere, withLock: withLock, ensureUser: ensureUser };
+  return { SCHEMA: SCHEMA, setup: setup, readAll: readAll, findAll: findAll, findOne: findOne, insert: insert, insertMany: insertMany, update: update, deleteWhere: deleteWhere, withLock: withLock, tryWithLock: tryWithLock, ensureUser: ensureUser };
 })();
 
 /** Apps Script エディタから一度実行: 全テーブルのタブを作成する */

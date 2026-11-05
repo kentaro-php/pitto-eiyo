@@ -88,6 +88,7 @@ pitto-eiyo/
 - 2026-11-05 PR #2 手料理・一般食品の検索（八訂ベース 77 品、`setupFoods`、`products.search`）。GAS v3→v4（レビュー対応）
 - 2026-11-05 PR #3 README に全体像・データの出どころ・更新手順を追記
 - 2026-11-05 PR #4 バーコードの無い商品の手入力登録（`custom:<id>`、本人だけに表示）。GAS v5、SW v3
+- 2026-11-05 PR #5 長期セッション（初回だけ Google ログイン、以後 90 日間はログイン不要。`sessions` タブ、`auth.session` / `auth.signout`）。GAS v6、SW v4
 
 ## 設計書との対応
 
@@ -99,7 +100,7 @@ pitto-eiyo/
 | F13 手料理・一般食品の入力 | ホームの「料理・食品を検索」で、ご飯・みそ汁・納豆・焼き鮭など約 80 品を名前・読みで検索して記録（`gas/Foods.gs`）。値は文部科学省「日本食品標準成分表（八訂）増補2023年」の 100 g 当たりに 1 食の目安量（茶碗 1 杯 150 g など）を掛けたもの。みそ汁・カレーライス・卵かけご飯などは食材の分量から合算。`setupFoods` で登録・更新 |
 | F14 バーコードの無い商品の手入力 | ホーム／スキャン画面の「手入力で登録」。名前と栄養成分（熱量だけでも可）を入れると JAN の代わりに `custom:<id>` が振られ、本人の検索・最近の商品から再記録できる（他人には見えない）。栄養成分表示の撮影（OCR）も使える。不要になったら商品カードから削除（`product.delete`）、退会時は物理削除 |
 | F8 未登録商品のフォールバック | 自前マスタ → Open Food Facts → Yahoo!（商品名のみ）→ ウェブ照会（Claude の web_search / web_fetch でメーカー・通販ページの商品名と栄養成分表示を読む。確からしければ `source=web` で自動保存、そうでなければ登録フォームの初期値）→ OCR 登録 / 手入力。登録した商品は共有マスタに蓄積（`source` 列で区別） |
-| F9 認証 | Google ログイン（GIS）→ ID トークンを GAS で検証（`aud` 確認、Cache に有効期限まで保存） |
+| F9 認証 | Google ログイン（GIS）→ ID トークンを GAS で検証（`aud` 確認、Cache に有効期限まで保存）。ID トークンは 1 時間で切れるので、ログイン直後に `auth.session` で長期セッション（`ps_…`、既定 90 日 = `SESSION_DAYS`）に交換して端末に保持し、以後はログイン不要。セッションは `sessions` タブにハッシュで保存され、設定画面のログアウト（`auth.signout`）・退会で無効化。許可リスト（`ALLOWED_EMAILS` など）はセッションでも毎回確認 |
 | F10 履歴編集・修正提案 | 記録の消去、商品情報の修正（登録者本人・管理者は反映、それ以外は `product_suggestions` に提案として保存） |
 | F11 最近の商品 | スキャン画面の「最近の商品」 |
 | F12 PWA | manifest + Service Worker（アプリ本体をキャッシュ）。記録は直近 35 日分を端末に保持し、オフライン中の登録・消去はキューに積んで再接続時に送信（`client_id` で二重登録を防止） |
@@ -130,6 +131,7 @@ pitto-eiyo/
 | `AUTH_MODE` | | `google`（既定）または `dev`。`dev` は自分専用の動作確認用。公開前に必ず `google` にする |
 | `GOOGLE_CLIENT_ID` | google のとき必須 | OAuth 2.0 クライアント ID（下記 3） |
 | `ALLOWED_EMAILS` / `ALLOWED_DOMAINS` | | カンマ区切り。設定すると、それ以外のアカウントは利用不可（テスター限定公開に） |
+| `SESSION_DAYS` | | ログイン後にログイン不要でいられる日数（既定 `90`、最大 365）。全員を強制ログアウトしたいときは `sessions` タブの行を消す（キャッシュの関係で最大 15 分は残る） |
 | `ADMIN_EMAILS` | | 管理者。商品情報をその場で修正でき、登録した商品が「確認済み」になる |
 | `CLAUDE_API_KEY` | OCR・ウェブ照会を使うなら | Anthropic の API キー。モデルは `CLAUDE_MODEL`（既定 `claude-opus-5-5`） |
 | `WEB_LOOKUP` | | 未登録 JAN の商品名と栄養成分を Claude の web_search / web_fetch で調べる（既定 `1`。`0` で無効）。`CLAUDE_API_KEY` が必要。1 回あたり検索 $0.01 ×最大4 ＋トークン代。同じ JAN は 6 時間キャッシュ |
@@ -190,7 +192,8 @@ npm run bundle       # gas/bundle/Code.gs（1 ファイル版）を生成
 | `ocr.parse` | 要 | `image_base64`, `media_type` → 栄養成分（`confidence` 付き） |
 | `log.create` / `log.update` / `log.delete` / `logs.list` | 要 | 記録（`client_id` で冪等）。応答に更新後の日次サマリ |
 | `summary.daily` / `summary.monthly` | 要 | 集計（判定込み） |
-| `profile.get` / `profile.update` / `account.delete` | 要 | 目標・退会（`confirm: "DELETE"`。本人の記録・手入力商品を物理削除） |
+| `profile.get` / `profile.update` / `account.delete` | 要 | 目標・退会（`confirm: "DELETE"`。本人の記録・手入力商品・セッションを物理削除） |
+| `auth.session` / `auth.signout` | 要 | ID トークン → 長期セッションの発行 / セッションの無効化 |
 | `sync.bootstrap` | 要 | 起動時の一括取得（プロフィール・目標・直近の記録・最近の商品） |
 
 応答は常に `{ "ok": true, "data": … }` または `{ "ok": false, "error": { "code", "message" } }`。主な `code`: `unauthorized` / `forbidden` / `not_found` / `validation` / `busy` / `rate_limited` / `upstream` / `ocr_refused` / `internal`。
