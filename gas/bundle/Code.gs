@@ -161,7 +161,14 @@
   function allOk(j) { return KEYS.every(function (k) { return j[k].s === 'ok'; }); }
 
   /* ---------- JAN / EAN ---------- */
-  function normJan(s) { s = String(s == null ? '' : s).replace(/\D/g, ''); return s.length === 12 ? '0' + s : s; }
+  /** 手料理・一般食品の疑似 JAN（"food:<key>"、Foods.gs が登録） */
+  function isFoodJan(s) { return /^food:[a-z0-9_]+$/.test(String(s == null ? '' : s)); }
+  function normJan(s) { if (isFoodJan(s)) return String(s); s = String(s == null ? '' : s).replace(/\D/g, ''); return s.length === 12 ? '0' + s : s; }
+  /** 検索用の正規化: 小文字、全角→半角、カタカナ→ひらがな、空白除去（web と GAS で共通） */
+  function normSearchText(s) {
+    s = String(s == null ? '' : s).toLowerCase().normalize('NFKC').replace(/\s+/g, '');
+    return s.replace(/[\u30a1-\u30f6]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0x60); });
+  }
   function eanValid(s) {
     s = String(s);
     if (!/^\d{8}$|^\d{13}$/.test(s)) return false;
@@ -249,8 +256,8 @@
   /** 商品登録フォーム / API の入力を検証して正規化する。失敗は ValidationError */
   function normalizeProduct(input) {
     input = input || {};
-    var jan = /^food:[a-z0-9_]+$/.test(String(input.jan || '')) ? String(input.jan) : normJan(input.jan);
-    if (jan.indexOf('food:') !== 0 && !eanValid(jan)) throw new ValidationError('JANコードが正しくありません。', 'jan');
+    var jan = normJan(input.jan);
+    if (!isFoodJan(jan) && !eanValid(jan)) throw new ValidationError('JANコードが正しくありません。', 'jan');
     var name = String(input.name || '').trim();
     if (!name) throw new ValidationError('商品名を入力してください。', 'name');
     if (name.length > 120) throw new ValidationError('商品名が長すぎます。', 'name');
@@ -302,7 +309,7 @@
     dateStr: dateStr, parseDate: parseDate, addDays: addDays, addMonths: addMonths, daysInMonth: daysInMonth,
     isValidDate: isValidDate, isValidMonth: isValidMonth, isValidTime: isValidTime, fmtDateJP: fmtDateJP, fmtMonthJP: fmtMonthJP, mealByHour: mealByHour,
     computeTargets: computeTargets, judge: judge, summarize: summarize, overall: overall, allOk: allOk,
-    normJan: normJan, eanValid: eanValid, eanCheckDigit: eanCheckDigit,
+    normJan: normJan, eanValid: eanValid, eanCheckDigit: eanCheckDigit, isFoodJan: isFoodJan, normSearchText: normSearchText,
     factorFor: factorFor, availableModes: availableModes, defaultAmount: defaultAmount, amountLabel: amountLabel, isLiquid: isLiquid,
     scaleN: scaleN, sodiumToSalt: sodiumToSalt, totals: totals, emptyTotals: emptyTotals,
     ValidationError: ValidationError, normalizeProduct: normalizeProduct, normalizeProfile: normalizeProfile
@@ -417,7 +424,7 @@ var Db = (function () {
     if (BOOL_COLS[col]) return truthy_(v);
     if (TEXT_COLS[col] || DATE_COLS[col]) {
       var s = String(v);
-      if (col === 'jan' && s.indexOf('food:') !== 0) s = PittoLogic.normJan(s); // food:<key> は手料理の疑似 JAN
+      if (col === 'jan') s = PittoLogic.normJan(s); // food:<key>（手料理の疑似 JAN）は normJan が素通しする
       return s;
     }
     return v;
@@ -458,6 +465,13 @@ var Db = (function () {
   function insert(name, obj) {
     sheet_(name).appendRow(toRow_(name, obj));
     return obj;
+  }
+  /** 複数行をまとめて追加（1 回の setValues。setupFoods のような一括登録用） */
+  function insertMany(name, objs) {
+    if (!objs.length) return objs;
+    var sh = sheet_(name), last = sh.getLastRow();
+    sh.getRange(last + 1, 1, objs.length, SCHEMA[name].length).setValues(objs.map(function (o) { return toRow_(name, o); }));
+    return objs;
   }
   function update(name, obj) {
     if (!obj._row) throw new ApiError('internal', '更新対象の行番号がありません。');
@@ -503,7 +517,7 @@ var Db = (function () {
     });
     cache.put(key, '1', 21600);
   }
-  return { SCHEMA: SCHEMA, setup: setup, readAll: readAll, findAll: findAll, findOne: findOne, insert: insert, update: update, deleteWhere: deleteWhere, withLock: withLock, ensureUser: ensureUser };
+  return { SCHEMA: SCHEMA, setup: setup, readAll: readAll, findAll: findAll, findOne: findOne, insert: insert, insertMany: insertMany, update: update, deleteWhere: deleteWhere, withLock: withLock, ensureUser: ensureUser };
 })();
 
 /** Apps Script エディタから一度実行: 全テーブルのタブを作成する */
@@ -663,6 +677,7 @@ var Products = (function () {
   function create(params, ctx) {
     var input = params.product || params;
     var norm = L().normalizeProduct(input);
+    if (L().isFoodJan(norm.jan)) throw new ApiError('validation', '手料理・一般食品は setupFoods で登録します。', { field: 'jan' });
     var existing = byJan(norm.jan);
     if (existing) return { product: pub(existing), created: false };
     var now = nowIso_();
@@ -714,7 +729,7 @@ var Products = (function () {
       var score = -1;
       if (name.indexOf(q) === 0) score = 0;
       else if (name.indexOf(q) >= 0) score = 1;
-      else if (alias && alias.split(' ').some(function (w) { return w.indexOf(q) === 0; })) score = 2;
+      else if (aliasWords_(r.jan).some(function (w) { return w.indexOf(q) === 0; })) score = 2;
       else if (alias.indexOf(q) >= 0) score = 3;
       if (score < 0) return;
       hits.push({ r: r, s: score + (r.source === 'food' ? 0 : 10) });
@@ -722,11 +737,8 @@ var Products = (function () {
     hits.sort(function (a, b) { return a.s - b.s || str_(a.r.name).localeCompare(str_(b.r.name), 'ja'); });
     return { products: hits.slice(0, limit).map(function (h) { return pub(h.r); }), total: hits.length };
   }
-  /** 検索用の正規化: 小文字化、全角→半角、カタカナ→ひらがな、空白除去 */
-  function normText_(s) {
-    s = str_(s).toLowerCase().normalize('NFKC').replace(/\s+/g, ' ').trim();
-    return s.replace(/[\u30a1-\u30f6]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0x60); });
-  }
+  function normText_(s) { return L().normSearchText(s); }
+  function aliasWords_(jan) { return str_(Foods.ALIASES[jan] || '').split(' ').map(normText_).filter(Boolean); }
 
   /** POST products.recent — 本人が最近記録した／登録した商品（スキャン無しで再記録するため） */
   function recent(params, ctx) {
@@ -878,7 +890,7 @@ var Foods = (function () {
     ['toast_butter', 'バタートースト', '6枚切り1枚', 68, 'ばたーとーすと トースト パン', [['shokupan', 60], ['butter', 8]]],
     ['coffee', 'コーヒー（ブラック）', 'カップ1杯', 150, 'こーひー 珈琲'],
     ['sencha', '緑茶', '湯のみ1杯', 150, 'りょくちゃ お茶 せんちゃ'],
-    ['beer', 'ビール', '350ml缶', 350, 'びーる'],
+    ['beer', 'ビール', '缶1本', 350, 'びーる'],
     ['nihonshu', '日本酒', '1合', 180, 'にほんしゅ 清酒'],
     ['wine', '赤ワイン', 'グラス1杯', 120, 'わいん ワイン'],
     ['mayo', 'マヨネーズ', '大さじ1', 12, 'まよねーず'],
@@ -887,9 +899,9 @@ var Foods = (function () {
     ['shoyu', 'しょうゆ', '小さじ1', 6, 'しょうゆ 醤油'],
     ['abura', 'サラダ油', '大さじ1', 12, 'あぶら 油 サラダ油']
   ];
-  var KEYS = ['energy_kcal', 'protein_g', 'fat_g', 'carb_g', 'salt_g', 'fiber_g'];
+  /* 液体（量を ml で表示し、L.isLiquid が true になるようにする。成分表の値は 100 g 当たりだが、飲料は密度≒1 として扱う） */
+  var LIQUIDS = { tounyu: 1, milk: 1, coffee: 1, sencha: 1, beer: 1, nihonshu: 1, wine: 1 };
 
-  function round_(v, d) { return Math.round(v * Math.pow(10, d)) / Math.pow(10, d); }
   /** 食材 key と質量 g から 5 項目＋食物繊維を計算 */
   function nutrientsOf_(recipe) {
     var tot = { energy_kcal: 0, protein_g: 0, fat_g: 0, carb_g: 0, salt_g: 0, fiber_g: 0 };
@@ -900,14 +912,15 @@ var Foods = (function () {
       tot.energy_kcal += p[1] * f; tot.protein_g += p[2] * f; tot.fat_g += p[3] * f; tot.carb_g += p[4] * f; tot.salt_g += p[5] * f; tot.fiber_g += p[6] * f;
     });
     tot.energy_kcal = Math.round(tot.energy_kcal);
-    ['protein_g', 'fat_g', 'carb_g', 'salt_g', 'fiber_g'].forEach(function (k) { tot[k] = round_(tot[k], 1); });
+    ['protein_g', 'fat_g', 'carb_g', 'salt_g', 'fiber_g'].forEach(function (k) { tot[k] = L().round(tot[k], 1); });
     return tot;
   }
   function rowOf_(item) {
     var key = item[0], recipe = item[5] || [[key, item[3]]];
     var n = nutrientsOf_(recipe);
+    var unit = LIQUIDS[key] ? 'ml' : 'g';
     return {
-      jan: 'food:' + key, name: item[1], brand: '', quantity_text: item[2] + '（' + item[3] + 'g）', serving_basis: 'per_serving', serving_g: item[3], package_g: null,
+      jan: 'food:' + key, name: item[1], brand: '', quantity_text: item[2] + '（' + item[3] + unit + '）', serving_basis: 'per_serving', serving_g: item[3], package_g: null,
       energy_kcal: n.energy_kcal, protein_g: n.protein_g, fat_g: n.fat_g, carb_g: n.carb_g, salt_g: n.salt_g, fiber_g: n.fiber_g,
       source: 'food', verified: true
     };
@@ -921,7 +934,8 @@ var Foods = (function () {
     var now = nowIso_(), inserted = 0, updated = 0;
     Db.withLock(function () {
       var existing = {};
-      Db.findAll('products', function (r) { return String(r.jan).indexOf('food:') === 0; }).forEach(function (r) { existing[r.jan] = r; });
+      Db.findAll('products', function (r) { return L().isFoodJan(r.jan); }).forEach(function (r) { existing[r.jan] = r; });
+      var fresh = [];
       ITEMS.forEach(function (it) {
         var row = rowOf_(it);
         var cur = existing[row.jan];
@@ -929,9 +943,10 @@ var Foods = (function () {
           Object.assign(cur, row, { updated_at: now, deleted_at: cur.deleted_at || '' });
           Db.update('products', cur); updated++;
         } else {
-          Db.insert('products', Object.assign({ id: uuid_(), created_by: '', created_at: now, updated_at: now, deleted_at: '' }, row)); inserted++;
+          fresh.push(Object.assign({ id: uuid_(), created_by: '', created_at: now, updated_at: now, deleted_at: '' }, row)); inserted++;
         }
       });
+      Db.insertMany('products', fresh);
     });
     return { inserted: inserted, updated: updated, total: ITEMS.length };
   }

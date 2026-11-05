@@ -288,6 +288,12 @@ test('手料理・一般食品: setupFoods / products.search / 記録', () => {
   // setupFoods を再実行すると標準値に戻る
   gas.run('setupFoods');
   assert.equal(gas.call('products.search', { q: 'ごはん' }).data.products.find(p => p.jan === 'food:gohan').serving_g, 150);
+  // 疑似 JAN は product.create では作れない（setupFoods 専用）
+  assert.equal(gas.call('product.create', { jan: 'food:evil', name: 'x', serving_basis: 'per_serving', serving_g: 1, energy_kcal: 1 }).error.code, 'validation');
+  // 空白入りの検索語、液体は ml 表記
+  assert.ok(gas.call('products.search', { q: 'みそ 汁' }).data.products.some(p => p.jan === 'food:misoshiru'));
+  const milk = gas.call('products.search', { q: '牛乳' }).data.products.find(p => p.jan === 'food:milk');
+  assert.equal(milk.quantity_text, 'コップ1杯（200ml）'); assert.equal(gas.call('log.create', { client_id: 'f3', product_id: milk.id, date: TODAY, amount_mode: 'grams', amount: 100 }).data.log.amount_label, '100ml');
   // バーコード照会は food: の行に影響しない
   assert.equal(gas.get({ action: 'product.get', jan: '4901234567894' }).data.product, null);
   const check = gas.run('selfCheck');

@@ -223,20 +223,19 @@
   $('go-search').addEventListener('click', function () { goto('search'); });
 
   /* ---------- 料理・食品の検索 ---------- */
-  var searchTimer = null, searchSeq = 0;
+  var searchTimer = null, searchSeq = 0, lastSearched = '';
   function renderSearch() {
     var q = $('search-input').value.trim();
-    if (q) runSearch(q); else { $('search-list').innerHTML = ''; }
+    if (q && q !== lastSearched) runSearch(q); else if (!q) { $('search-list').innerHTML = ''; lastSearched = ''; }
     setTimeout(function () { $('search-input').focus(); }, 50);
   }
   function foodItemHtml(p) {
     return '<button type="button" class="item" data-pid="' + esc(p.id) + '"><span class="name">' + esc(p.name) + sourceTag(p, true) + '<div class="sub">' + esc(p.quantity_text || '') + (p.quantity_text ? ' · ' : '') + BASIS_NAME[p.serving_basis] + 'あたり ' + fmt(p.energy_kcal, 0) + ' kcal</div></span><span class="val">›</span></button>';
   }
   function localSearch(q) {
-    var nq = normText(q);
-    return Object.keys(Store.S.products).map(function (id) { return Store.S.products[id]; }).filter(function (p) { return normText(p.name).indexOf(nq) >= 0; }).slice(0, 10);
+    var nq = L.normSearchText(q);
+    return Object.keys(Store.S.products).map(function (id) { return Store.S.products[id]; }).filter(function (p) { return L.normSearchText(p.name).indexOf(nq) >= 0; }).slice(0, 10);
   }
-  function normText(s) { return String(s || '').toLowerCase().normalize('NFKC').replace(/[\u30a1-\u30f6]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0x60); }).replace(/\s+/g, ''); }
   async function runSearch(q) {
     var seq = ++searchSeq;
     var local = localSearch(q);
@@ -252,10 +251,12 @@
       Store.save();
       $('search-list').innerHTML = data.products.length ? data.products.map(foodItemHtml).join('') : '<p class="hint">見つかりませんでした。別の言い方（例: ごはん → 白米）で試すか、「バーコードを読む」から商品を登録してください。</p>';
       setMsg('search-status', data.products.length ? data.total + ' 件' : '');
+      lastSearched = q;
     } catch (e) {
       if (seq !== searchSeq) return;
       $('search-list').innerHTML = local.map(foodItemHtml).join('');
-      setMsg('search-status', e.message || '検索に失敗しました。', 'err');
+      setMsg('search-status', Api.isNetworkError(e) ? '通信できませんでした。端末内の商品だけ表示しています。' : (e.message || '検索に失敗しました。'), 'err');
+      handleApiError(e, { silent: true });
     }
   }
   $('search-input').addEventListener('input', function () {
@@ -268,7 +269,7 @@
   $('search-back').addEventListener('click', function () { goto('home'); });
   $('search-list').addEventListener('click', function (e) {
     var it = e.target.closest('[data-pid]'); if (!it) return;
-    var p = Store.productById(it.getAttribute('data-pid')); if (p) { state.fromSearch = true; openProduct(p); }
+    var p = Store.productById(it.getAttribute('data-pid')); if (p) openProduct(p, true);
   });
 
   /* ---------- スキャン ---------- */
@@ -357,7 +358,8 @@
       else { setScanStatus(e.message || '照会に失敗しました。', 'err'); }
     } finally { lookupBusy = false; }
   }
-  function openProduct(p) {
+  function openProduct(p, fromSearch) {
+    state.fromSearch = !!fromSearch;
     state.product = p;
     state.amount = L.defaultAmount(p);
     state.meal = L.mealByHour(new Date().getHours());

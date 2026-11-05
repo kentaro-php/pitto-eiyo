@@ -62,7 +62,7 @@ var Db = (function () {
     if (BOOL_COLS[col]) return truthy_(v);
     if (TEXT_COLS[col] || DATE_COLS[col]) {
       var s = String(v);
-      if (col === 'jan' && s.indexOf('food:') !== 0) s = PittoLogic.normJan(s); // food:<key> は手料理の疑似 JAN
+      if (col === 'jan') s = PittoLogic.normJan(s); // food:<key>（手料理の疑似 JAN）は normJan が素通しする
       return s;
     }
     return v;
@@ -103,6 +103,13 @@ var Db = (function () {
   function insert(name, obj) {
     sheet_(name).appendRow(toRow_(name, obj));
     return obj;
+  }
+  /** 複数行をまとめて追加（1 回の setValues。setupFoods のような一括登録用） */
+  function insertMany(name, objs) {
+    if (!objs.length) return objs;
+    var sh = sheet_(name), last = sh.getLastRow();
+    sh.getRange(last + 1, 1, objs.length, SCHEMA[name].length).setValues(objs.map(function (o) { return toRow_(name, o); }));
+    return objs;
   }
   function update(name, obj) {
     if (!obj._row) throw new ApiError('internal', '更新対象の行番号がありません。');
@@ -148,7 +155,7 @@ var Db = (function () {
     });
     cache.put(key, '1', 21600);
   }
-  return { SCHEMA: SCHEMA, setup: setup, readAll: readAll, findAll: findAll, findOne: findOne, insert: insert, update: update, deleteWhere: deleteWhere, withLock: withLock, ensureUser: ensureUser };
+  return { SCHEMA: SCHEMA, setup: setup, readAll: readAll, findAll: findAll, findOne: findOne, insert: insert, insertMany: insertMany, update: update, deleteWhere: deleteWhere, withLock: withLock, ensureUser: ensureUser };
 })();
 
 /** Apps Script エディタから一度実行: 全テーブルのタブを作成する */

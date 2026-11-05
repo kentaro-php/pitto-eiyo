@@ -116,7 +116,7 @@ var Foods = (function () {
     ['toast_butter', 'バタートースト', '6枚切り1枚', 68, 'ばたーとーすと トースト パン', [['shokupan', 60], ['butter', 8]]],
     ['coffee', 'コーヒー（ブラック）', 'カップ1杯', 150, 'こーひー 珈琲'],
     ['sencha', '緑茶', '湯のみ1杯', 150, 'りょくちゃ お茶 せんちゃ'],
-    ['beer', 'ビール', '350ml缶', 350, 'びーる'],
+    ['beer', 'ビール', '缶1本', 350, 'びーる'],
     ['nihonshu', '日本酒', '1合', 180, 'にほんしゅ 清酒'],
     ['wine', '赤ワイン', 'グラス1杯', 120, 'わいん ワイン'],
     ['mayo', 'マヨネーズ', '大さじ1', 12, 'まよねーず'],
@@ -125,9 +125,9 @@ var Foods = (function () {
     ['shoyu', 'しょうゆ', '小さじ1', 6, 'しょうゆ 醤油'],
     ['abura', 'サラダ油', '大さじ1', 12, 'あぶら 油 サラダ油']
   ];
-  var KEYS = ['energy_kcal', 'protein_g', 'fat_g', 'carb_g', 'salt_g', 'fiber_g'];
+  /* 液体（量を ml で表示し、L.isLiquid が true になるようにする。成分表の値は 100 g 当たりだが、飲料は密度≒1 として扱う） */
+  var LIQUIDS = { tounyu: 1, milk: 1, coffee: 1, sencha: 1, beer: 1, nihonshu: 1, wine: 1 };
 
-  function round_(v, d) { return Math.round(v * Math.pow(10, d)) / Math.pow(10, d); }
   /** 食材 key と質量 g から 5 項目＋食物繊維を計算 */
   function nutrientsOf_(recipe) {
     var tot = { energy_kcal: 0, protein_g: 0, fat_g: 0, carb_g: 0, salt_g: 0, fiber_g: 0 };
@@ -138,14 +138,15 @@ var Foods = (function () {
       tot.energy_kcal += p[1] * f; tot.protein_g += p[2] * f; tot.fat_g += p[3] * f; tot.carb_g += p[4] * f; tot.salt_g += p[5] * f; tot.fiber_g += p[6] * f;
     });
     tot.energy_kcal = Math.round(tot.energy_kcal);
-    ['protein_g', 'fat_g', 'carb_g', 'salt_g', 'fiber_g'].forEach(function (k) { tot[k] = round_(tot[k], 1); });
+    ['protein_g', 'fat_g', 'carb_g', 'salt_g', 'fiber_g'].forEach(function (k) { tot[k] = L().round(tot[k], 1); });
     return tot;
   }
   function rowOf_(item) {
     var key = item[0], recipe = item[5] || [[key, item[3]]];
     var n = nutrientsOf_(recipe);
+    var unit = LIQUIDS[key] ? 'ml' : 'g';
     return {
-      jan: 'food:' + key, name: item[1], brand: '', quantity_text: item[2] + '（' + item[3] + 'g）', serving_basis: 'per_serving', serving_g: item[3], package_g: null,
+      jan: 'food:' + key, name: item[1], brand: '', quantity_text: item[2] + '（' + item[3] + unit + '）', serving_basis: 'per_serving', serving_g: item[3], package_g: null,
       energy_kcal: n.energy_kcal, protein_g: n.protein_g, fat_g: n.fat_g, carb_g: n.carb_g, salt_g: n.salt_g, fiber_g: n.fiber_g,
       source: 'food', verified: true
     };
@@ -159,7 +160,8 @@ var Foods = (function () {
     var now = nowIso_(), inserted = 0, updated = 0;
     Db.withLock(function () {
       var existing = {};
-      Db.findAll('products', function (r) { return String(r.jan).indexOf('food:') === 0; }).forEach(function (r) { existing[r.jan] = r; });
+      Db.findAll('products', function (r) { return L().isFoodJan(r.jan); }).forEach(function (r) { existing[r.jan] = r; });
+      var fresh = [];
       ITEMS.forEach(function (it) {
         var row = rowOf_(it);
         var cur = existing[row.jan];
@@ -167,9 +169,10 @@ var Foods = (function () {
           Object.assign(cur, row, { updated_at: now, deleted_at: cur.deleted_at || '' });
           Db.update('products', cur); updated++;
         } else {
-          Db.insert('products', Object.assign({ id: uuid_(), created_by: '', created_at: now, updated_at: now, deleted_at: '' }, row)); inserted++;
+          fresh.push(Object.assign({ id: uuid_(), created_by: '', created_at: now, updated_at: now, deleted_at: '' }, row)); inserted++;
         }
       });
+      Db.insertMany('products', fresh);
     });
     return { inserted: inserted, updated: updated, total: ITEMS.length };
   }
