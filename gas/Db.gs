@@ -62,7 +62,7 @@ var Db = (function () {
     if (BOOL_COLS[col]) return truthy_(v);
     if (TEXT_COLS[col] || DATE_COLS[col]) {
       var s = String(v);
-      if (col === 'jan') s = PittoLogic.normJan(s); // food:<key>（手料理の疑似 JAN）は normJan が素通しする
+      if (col === 'jan') s = PittoLogic.normJan(s); // food:<key> / custom:<id>（疑似 JAN）は normJan が素通しする
       return s;
     }
     return v;

@@ -18,6 +18,7 @@
     if (p.source === 'off') return '<span class="tag off">' + (short ? 'OFF' : 'Open Food Facts') + '</span>';
     if (p.source === 'web') return '<span class="tag web">' + (short ? 'ウェブ' : 'ウェブ検索・要確認') + '</span>';
     if (p.source === 'food') return '<span class="tag off">' + (short ? '成分表' : '食品標準成分表（八訂）') + '</span>';
+    if (L.isCustomJan(p.jan)) return '<span class="tag">' + (short ? '手入力' : 'バーコードなし・手入力') + '</span>';
     return '';
   }
   function toast(msg) { var t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2600); }
@@ -221,6 +222,10 @@
   $('go-manual').addEventListener('click', function () { state.noCamera = true; goto('scan'); setTimeout(function () { $('jan-input').focus(); }, 50); });
   $('go-recent').addEventListener('click', function () { state.noCamera = true; goto('scan'); setTimeout(function () { $('recent-list').scrollIntoView({ block: 'start' }); }, 50); });
   $('go-search').addEventListener('click', function () { goto('search'); });
+  /** バーコードの無い商品（パン屋・惣菜・外食など）を手入力で登録。jan は custom:new で送り、サーバが custom:<id> を振る */
+  function startCustom() { state.jan = 'custom:new'; state.editId = null; state.hint = null; goto('register'); }
+  $('go-custom').addEventListener('click', startCustom);
+  $('scan-custom').addEventListener('click', startCustom);
 
   /* ---------- 料理・食品の検索 ---------- */
   var searchTimer = null, searchSeq = 0, lastSearched = '';
@@ -370,7 +375,8 @@
   /* ---------- 商品カード ---------- */
   function amountOptions(p) {
     var modes = L.availableModes(p), opts = [];
-    if (modes.indexOf('package') >= 0) opts.push(['package', 1, '1個'], ['package', 0.5, '半分'], ['package', 2, '2個']);
+    // 1食あたり表示で内容量の総量が無いときは「1個」=「1食」なので、重複する個数チップは出さない
+    if (modes.indexOf('package') >= 0 && !(p.serving_basis === 'per_serving' && !(p.package_g > 0))) opts.push(['package', 1, '1個'], ['package', 0.5, '半分'], ['package', 2, '2個']);
     if (modes.indexOf('serving') >= 0 && p.serving_basis === 'per_serving') opts.push(['serving', 1, '1食'], ['serving', 0.5, '半分'], ['serving', 2, '2食']);
     if (modes.indexOf('grams') >= 0) {
       var u = L.isLiquid(p) ? 'ml' : 'g';
@@ -383,7 +389,8 @@
   function renderProduct() {
     var p = state.product; if (!p) return;
     $('p-name').innerHTML = esc(p.name) + sourceTag(p, false) + (p.verified ? '<span class="tag">確認済み</span>' : '');
-    $('p-sub').textContent = (p.brand ? p.brand + ' · ' : '') + (p.quantity_text ? p.quantity_text + ' · ' : '') + (p.source === 'food' ? '' : 'JAN ' + p.jan + ' · ') + BASIS_NAME[p.serving_basis] + (p.serving_basis !== 'per_100g' && p.serving_g ? '（' + fmt(p.serving_g, 0) + (L.isLiquid(p) ? 'ml' : 'g') + '）' : '') + 'あたりの表示';
+    $('p-sub').textContent = (p.brand ? p.brand + ' · ' : '') + (p.quantity_text ? p.quantity_text + ' · ' : '') + (L.isPseudoJan(p.jan) ? '' : 'JAN ' + p.jan + ' · ') + BASIS_NAME[p.serving_basis] + (p.serving_basis !== 'per_100g' && p.serving_g ? '（' + fmt(p.serving_g, 0) + (L.isLiquid(p) ? 'ml' : 'g') + '）' : '') + 'あたりの表示';
+    $('p-delete').hidden = !L.isCustomJan(p.jan);
     var opts = amountOptions(p);
     if (!opts.length) { state.amount = L.defaultAmount(p); }
     $('amount-chips').innerHTML = opts.map(function (o) {
@@ -427,7 +434,19 @@
     Array.prototype.forEach.call($('meal-chips').querySelectorAll('.chip'), function (x) { x.setAttribute('aria-pressed', String(x === c)); });
   });
   $('log-date').addEventListener('change', function () { state.keepDate = true; renderProductTable(); });
-  $('product-back').addEventListener('click', function () { if (state.fromSearch) { state.fromSearch = false; goto('search'); return; } state.noCamera = true; goto('scan'); });
+  $('product-back').addEventListener('click', function () { if (state.fromSearch) { state.fromSearch = false; goto('search'); return; } if (state.product && L.isCustomJan(state.product.jan)) { goto('home'); return; } state.noCamera = true; goto('scan'); });
+  $('p-delete').addEventListener('click', async function () {
+    var p = state.product; if (!p || !L.isCustomJan(p.jan)) return;
+    if (!confirm('「' + p.name + '」を削除しますか？（これまでの記録は残ります）')) return;
+    if (!Api.isConfigured() || !online()) { toast('削除には通信が必要です'); return; }
+    var btn = $('p-delete'); btn.disabled = true;
+    try {
+      await Api.request('product.delete', { id: p.id });
+      Store.removeProduct(p.id); Store.save();
+      state.product = null; state.fromSearch = false;
+      toast('手入力商品を削除しました'); goto('home');
+    } catch (e) { handleApiError(e); } finally { btn.disabled = false; }
+  });
   $('p-edit').addEventListener('click', function () { if (!state.product) return; state.editId = state.product.id; state.jan = state.product.jan; goto('register'); });
   $('log-save').addEventListener('click', async function () {
     var p = state.product; if (!p) return;
@@ -460,16 +479,19 @@
   function renderRegister() {
     var p = state.editId ? Store.productById(state.editId) : null;
     if (state.editId && !p) state.editId = null;
-    var editing = !!p;
-    $('reg-title').textContent = editing ? '商品情報を修正' : '商品を登録';
-    $('reg-intro').textContent = editing ? '数値を修正して保存します。登録した本人（または管理者）以外の修正は「修正提案」として記録されます。' : 'この商品はまだ登録されていません。パッケージの栄養成分表示を撮影すると、数値を自動で入力します。';
+    var editing = !!p, custom = L.isCustomJan(editing ? p.jan : state.jan);
+    $('reg-title').textContent = editing ? '商品情報を修正' : (custom ? 'バーコードなしで登録' : '商品を登録');
+    $('reg-intro').textContent = editing ? '数値を修正して保存します。登録した本人（または管理者）以外の修正は「修正提案」として記録されます。'
+      : custom ? 'バーコードが無い・読めない商品やお店の料理を、名前と栄養成分で登録します（自分だけに表示されます）。栄養成分表示があれば撮影で自動入力できます。無ければ熱量だけでも登録できます。'
+      : 'この商品はまだ登録されていません。パッケージの栄養成分表示を撮影すると、数値を自動で入力します。';
+    $('f-jan-field').hidden = custom;
     $('f-error').hidden = true; setMsg('ocr-status', '');
     FIELDS.forEach(function (f) { var el = $('f-' + f); el.classList.remove('lowconf'); });
     $('f-jan').value = editing ? p.jan : (state.jan || '');
     $('f-name').value = editing ? p.name : (state.hint && state.hint.name ? state.hint.name : '');
     $('f-brand').value = editing ? (p.brand || '') : (state.hint && state.hint.brand ? state.hint.brand : '');
     $('f-qty').value = editing ? (p.quantity_text || '') : (state.hint && state.hint.quantity_text ? state.hint.quantity_text : '');
-    $('f-basis').value = editing ? p.serving_basis : 'per_package';
+    $('f-basis').value = editing ? p.serving_basis : (custom ? 'per_serving' : 'per_package');
     $('f-serving-g').value = editing && p.serving_g != null ? p.serving_g : '';
     $('f-package-g').value = editing && p.package_g != null ? p.package_g : '';
     L.KEYS.concat(L.OPTIONAL_KEYS).forEach(function (k) { $('f-' + k).value = editing && p[k] != null ? p[k] : ''; });
@@ -497,11 +519,12 @@
   }
   function syncBasisLabel() {
     var b = $('f-basis').value;
-    $('f-serving-g-label').textContent = b === 'per_100g' ? '1食の質量（g / ml・任意）' : b === 'per_serving' ? '1食の質量（g / ml）' : '1包装の質量（g / ml）';
+    var opt = b === 'per_100g' || $('f-jan-field').hidden ? '・任意' : ''; // 手入力登録（バーコードなし）は質量が無くても 1食／1個単位で記録できる
+    $('f-serving-g-label').textContent = b === 'per_100g' ? '1食の質量（g / ml' + opt + '）' : b === 'per_serving' ? '1食の質量（g / ml' + opt + '）' : '1包装の質量（g / ml' + opt + '）';
   }
   $('f-basis').addEventListener('change', syncBasisLabel);
   $('f-sodium_mg').addEventListener('input', function () { var mg = Number(this.value); if (mg > 0) $('f-salt_g').value = L.sodiumToSalt(mg); });
-  $('reg-back').addEventListener('click', function () { if (state.editId) { state.editId = null; goto('product'); } else { state.noCamera = true; goto('scan'); } });
+  $('reg-back').addEventListener('click', function () { if (state.editId) { state.editId = null; goto('product'); } else if (L.isCustomJan(state.jan)) { state.jan = null; goto('home'); } else { state.noCamera = true; goto('scan'); } });
   function collectForm() {
     var o = { jan: $('f-jan').value, name: $('f-name').value, brand: $('f-brand').value, quantity_text: $('f-qty').value, serving_basis: $('f-basis').value, serving_g: $('f-serving-g').value, package_g: $('f-package-g').value, sodium_mg: $('f-sodium_mg').value };
     L.KEYS.concat(L.OPTIONAL_KEYS).forEach(function (k) { o[k] = $('f-' + k).value; });

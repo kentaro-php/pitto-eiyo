@@ -50,6 +50,7 @@
         <button class="btn soft" type="button" id="go-recent">最近の商品</button>
       </div>
       <button class="btn soft" type="button" id="go-search">料理・食品を検索（ご飯・みそ汁など）</button>
+      <button class="btn soft" type="button" id="go-custom">バーコードがない商品を手入力で登録</button>
     </div>
     <div class="card">
       <div class="row"><h2>記録</h2><span class="hint" id="home-sync"></span></div>
@@ -79,6 +80,8 @@
       </div>
       <button class="btn soft" type="button" id="jan-search">このコードで検索</button>
       <p class="err" id="jan-error" hidden></p>
+      <p class="hint">バーコードが無い・読めない商品（パン屋・お惣菜・外食など）は、名前と栄養成分を手入力で登録できます。</p>
+      <button class="btn soft" type="button" id="scan-custom">手入力で登録</button>
     </div>
     <div class="card">
       <h2>最近の商品</h2>
@@ -107,6 +110,7 @@
       </div>
       <div class="ntable" id="p-table"></div>
       <button class="btn soft" type="button" id="p-edit">商品情報を修正</button>
+      <button class="btn soft" type="button" id="p-delete" hidden>この手入力商品を削除</button>
     </div>
     <div class="card">
       <div class="field">
@@ -139,7 +143,7 @@
       <p class="hint" id="ocr-status" aria-live="polite"></p>
     </div>
     <div class="card">
-      <div class="field"><label for="f-jan">JANコード</label><input class="input" id="f-jan" readonly></div>
+      <div class="field" id="f-jan-field"><label for="f-jan">JANコード</label><input class="input" id="f-jan" readonly></div>
       <div class="field"><label for="f-name">商品名</label><input class="input" id="f-name" placeholder="例: サラダチキン プレーン" autocomplete="off"></div>
       <div class="two">
         <div class="field"><label for="f-brand">メーカー（任意）</label><input class="input" id="f-brand" autocomplete="off"></div>

@@ -30,6 +30,7 @@ window.PittoStore = (function () {
     return null;
   }
   function productById(id) { return S.products[id] || null; }
+  function removeProduct(id) { delete S.products[id]; }
   function logsForDate(date) { return S.logs.filter(function (l) { return l.date === date; }); }
   function hasDate(date) { return !!(S.range && date >= S.range.from && date <= S.range.to); }
   /** サーバーから取り込んだ期間の記録で置き換える（送信待ちのローカル記録は残す） */
@@ -47,7 +48,7 @@ window.PittoStore = (function () {
   return {
     get S() { return S; },
     load: load, save: save, reset: reset, bindUser: bindUser,
-    upsertProduct: upsertProduct, productByJan: productByJan, productById: productById,
+    upsertProduct: upsertProduct, removeProduct: removeProduct, productByJan: productByJan, productById: productById,
     logsForDate: logsForDate, hasDate: hasDate, setLogs: setLogs, addLog: addLog, removeLog: removeLog, replaceLog: replaceLog,
     enqueue: enqueue, dequeue: dequeue
   };

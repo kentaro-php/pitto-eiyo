@@ -43,7 +43,7 @@ var Logs = (function () {
     if (!clientId || clientId.length > 64) throw new ApiError('validation', 'client_id が必要です。', { field: 'client_id' });
     var dup = Db.findOne('food_logs', function (r) { return r.user_id === user.id && r.client_id === clientId; });
     if (dup) return { log: pub(dup), daily_summary: Summary.getOrCompute(user, dup.date), duplicate: true };
-    var product = Products.byId(params.product_id);
+    var product = Products.visibleById(params.product_id, ctx);
     if (!product) throw new ApiError('not_found', '商品が見つかりません。', { field: 'product_id' });
     var v = validateCommon_(params, null);
     var factor = L().factorFor(product, v.amount_mode, v.amount);
