@@ -14,6 +14,11 @@
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function uid() { try { return crypto.randomUUID(); } catch (e) { return Date.now().toString(36) + Math.random().toString(36).slice(2, 10); } }
   var toastTimer = null;
+  function sourceTag(p, short) {
+    if (p.source === 'off') return '<span class="tag off">' + (short ? 'OFF' : 'Open Food Facts') + '</span>';
+    if (p.source === 'web') return '<span class="tag web">' + (short ? 'ウェブ' : 'ウェブ検索・要確認') + '</span>';
+    return '';
+  }
   function toast(msg) { var t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2600); }
   function chipHtml(j) { return '<span class="st ' + j.s + '">' + esc(j.t) + '</span>'; }
   function targets() { return Store.S.targets || L.computeTargets(Store.S.profile || {}, new Date().getFullYear()); }
@@ -22,7 +27,7 @@
 
   var state = {
     authed: false, syncing: false, homeDate: todayStr(), month: todayStr().slice(0, 7),
-    product: null, jan: null, hint: null, editId: null, selLog: null, amount: { mode: 'package', amount: 1 }, meal: 'lunch', keepDate: false, ocrUsed: false,
+    product: null, jan: null, hint: null, editId: null, selLog: null, amount: { mode: 'package', amount: 1 }, meal: 'lunch', keepDate: false, ocrUsed: false, hintUsed: false,
     extra: {}, view: 'home'
   };
 
@@ -226,7 +231,7 @@
     $('jan-error').hidden = true;
     var list = recentProducts();
     $('recent-list').innerHTML = list.length ? list.map(function (p) {
-      return '<button type="button" class="item" data-pid="' + esc(p.id) + '"><span class="name">' + esc(p.name) + (p.source === 'off' ? '<span class="tag off">OFF</span>' : '') + '<div class="sub">' + esc(p.quantity_text || '') + (p.quantity_text ? ' · ' : '') + BASIS_NAME[p.serving_basis] + 'あたり ' + fmt(p.energy_kcal, 0) + ' kcal</div></span><span class="val">›</span></button>';
+      return '<button type="button" class="item" data-pid="' + esc(p.id) + '"><span class="name">' + esc(p.name) + sourceTag(p, true) + '<div class="sub">' + esc(p.quantity_text || '') + (p.quantity_text ? ' · ' : '') + BASIS_NAME[p.serving_basis] + 'あたり ' + fmt(p.energy_kcal, 0) + ' kcal</div></span><span class="val">›</span></button>';
     }).join('') : '<p class="hint">まだ商品がありません。</p>';
     if (state.noCamera) { state.noCamera = false; setScannerOff('「カメラを起動」を押すとスキャンできます'); return; }
     startCamera();
@@ -289,8 +294,11 @@
     setScanStatus('<span class="spin"></span>商品を照会中…');
     $('scan-status').innerHTML = '<span class="spin"></span>商品を照会中…';
     try {
-      var data = await Api.get('product.get', { jan: code, external: '1' });
-      if (data.product) { Store.upsertProduct(data.product); Store.save(); setScanStatus(''); openProduct(data.product); }
+      var data = await Api.request('product.get', { jan: code, external: '1' }, { timeout: 90000 });
+      if (data.product) {
+        Store.upsertProduct(data.product); Store.save(); setScanStatus(''); openProduct(data.product);
+        if (data.found === 'web') toast('ウェブ検索で見つけた商品です。数値はパッケージと照合してください');
+      }
       else { state.jan = code; state.editId = null; state.hint = data.hint || null; setScanStatus(''); goto('register'); }
     } catch (e) {
       if (Api.isNetworkError(e)) { setScanStatus('通信できないため商品を照会できません。つながってからもう一度お試しください。', 'err'); }
@@ -320,7 +328,7 @@
   function unitFor(p, mode) { return mode === 'grams' ? (L.isLiquid(p) ? 'ml' : 'g') : mode === 'serving' ? '食' : '個'; }
   function renderProduct() {
     var p = state.product; if (!p) return;
-    $('p-name').innerHTML = esc(p.name) + (p.source === 'off' ? '<span class="tag off">Open Food Facts</span>' : '') + (p.verified ? '<span class="tag">確認済み</span>' : '');
+    $('p-name').innerHTML = esc(p.name) + sourceTag(p, false) + (p.verified ? '<span class="tag">確認済み</span>' : '');
     $('p-sub').textContent = (p.brand ? p.brand + ' · ' : '') + (p.quantity_text ? p.quantity_text + ' · ' : '') + 'JAN ' + p.jan + ' · ' + BASIS_NAME[p.serving_basis] + (p.serving_basis !== 'per_100g' && p.serving_g ? '（' + fmt(p.serving_g, 0) + (L.isLiquid(p) ? 'ml' : 'g') + '）' : '') + 'あたりの表示';
     var opts = amountOptions(p);
     if (!opts.length) { state.amount = L.defaultAmount(p); }
@@ -406,15 +414,32 @@
     $('f-jan').value = editing ? p.jan : (state.jan || '');
     $('f-name').value = editing ? p.name : (state.hint && state.hint.name ? state.hint.name : '');
     $('f-brand').value = editing ? (p.brand || '') : (state.hint && state.hint.brand ? state.hint.brand : '');
-    $('f-qty').value = editing ? (p.quantity_text || '') : '';
+    $('f-qty').value = editing ? (p.quantity_text || '') : (state.hint && state.hint.quantity_text ? state.hint.quantity_text : '');
     $('f-basis').value = editing ? p.serving_basis : 'per_package';
     $('f-serving-g').value = editing && p.serving_g != null ? p.serving_g : '';
     $('f-package-g').value = editing && p.package_g != null ? p.package_g : '';
     L.KEYS.concat(L.OPTIONAL_KEYS).forEach(function (k) { $('f-' + k).value = editing && p[k] != null ? p[k] : ''; });
     $('f-sodium_mg').value = '';
-    state.ocrUsed = false;
+    state.ocrUsed = false; state.hintUsed = false;
     syncBasisLabel();
-    if (state.hint && state.hint.name && !editing) setMsg('ocr-status', '商品名は Yahoo!ショッピングから取得しました。栄養成分は撮影または手入力してください。');
+    var h = state.hint;
+    if (!editing && h && h.provider === 'web' && h.filled > 0) applyLookup(h, 'web');
+    else if (!editing && h && h.name) setMsg('ocr-status', h.provider === 'web' ? '商品名はウェブ検索から取得しました。栄養成分は見つからなかったので、撮影または手入力してください。' : '商品名は Yahoo!ショッピングから取得しました。栄養成分は撮影または手入力してください。');
+  }
+  /** ウェブ照会の結果をフォームに流し込む（OCR と同じ要確認扱い） */
+  function applyLookup(h, kind) {
+    var low = (h.confidence || 0) < 0.7, filled = 0;
+    L.KEYS.concat(L.OPTIONAL_KEYS).forEach(function (k) { var el = $('f-' + k); if (typeof h[k] === 'number') { el.value = h[k]; filled++; el.classList.toggle('lowconf', low); } });
+    if (h.sodium_mg != null) $('f-sodium_mg').value = h.sodium_mg;
+    if (h.basis) { $('f-basis').value = h.basis; syncBasisLabel(); }
+    if (typeof h.serving_g === 'number') $('f-serving-g').value = h.serving_g;
+    if (typeof h.package_g === 'number') $('f-package-g').value = h.package_g;
+    state.hintUsed = kind === 'web' && filled > 0;
+    var conf = Math.round((h.confidence || 0) * 100);
+    var src = h.source_url ? ' 出典: <a href="' + esc(h.source_url) + '" target="_blank" rel="noopener">' + esc(h.source_url.replace(/^https?:\/\//, '').slice(0, 40)) + '</a>' : '';
+    var el = $('ocr-status');
+    el.className = low ? 'warnmsg' : 'okmsg';
+    el.innerHTML = esc('ウェブ検索で ' + filled + ' 項目を取得しました（信頼度 ' + conf + '%）。' + (low ? '黄色の欄をパッケージと照合してください。' : 'パッケージの表示と照合して保存してください。') + (h.notes ? ' ' + h.notes : '')) + src;
   }
   function syncBasisLabel() {
     var b = $('f-basis').value;
@@ -444,7 +469,7 @@
         state.editId = null;
         openProduct(data.product);
       } else {
-        data = await Api.request('product.create', Object.assign({ source: state.ocrUsed ? 'ocr' : 'manual' }, norm));
+        data = await Api.request('product.create', Object.assign({ source: state.ocrUsed ? 'ocr' : (state.hintUsed ? 'web' : 'manual') }, norm));
         Store.upsertProduct(data.product); Store.save();
         toast(data.created ? '商品を登録しました' : '登録済みの商品を開きます');
         state.jan = null; state.hint = null;

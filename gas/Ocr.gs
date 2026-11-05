@@ -118,5 +118,5 @@ var Ocr = (function () {
     out.filled = ['energy_kcal', 'protein_g', 'fat_g', 'carb_g', 'salt_g'].filter(function (k) { return out[k] != null; }).length;
     return out;
   }
-  return { parse: parse, SCHEMA: SCHEMA };
+  return { parse: parse, normalize: normalize_, SCHEMA: SCHEMA };
 })();

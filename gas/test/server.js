@@ -12,12 +12,21 @@ const port = Number(process.argv[2] || process.env.PORT || 8787);
 const webDir = path.join(__dirname, '..', '..', 'web');
 const OFF_JAN = '4902102072618';
 const offResponse = { status: 1, product: { product_name: 'Test Cola', brands: 'TestBrand', quantity: '500 ml', nutriments: { 'energy-kcal_100g': 45, proteins_100g: 0, fat_100g: 0, carbohydrates_100g: 11.3, sodium_100g: 0.01, sugars_100g: 11.3 } } };
+const WEB_JAN = '4902105001011';
+const webResult = { found: true, name: 'カップヌードル（ウェブ照会）', brand: '日清食品', quantity_text: '78g', basis: 'per_package', serving_g: 78, package_g: 78, energy_kcal: 351, protein_g: 10.5, fat_g: 14.6, carb_g: 44.5, salt_g: 4.9, sodium_mg: null, sugar_g: null, fiber_g: null, satfat_g: null, confidence: 0.9, source_url: 'https://www.nissin.com/jp/products/items/1', notes: '' };
 const ocrResult = { basis: 'per_package', serving_g: 110, package_g: 110, name: 'サラダチキン（OCR）', energy_kcal: 121, protein_g: 26, fat_g: 1.6, carb_g: 0.5, salt_g: null, sodium_mg: 470, sugar_g: null, fiber_g: null, satfat_g: 0.4, confidence: 0.62, notes: 'ナトリウム表記' };
 const gas = createGas({
   properties: { AUTH_MODE: 'dev', DEBUG: '1', CLAUDE_API_KEY: 'mock' },
-  fetch: (url) => {
+  fetch: (url, opts) => {
     if (url.includes('openfoodfacts.org')) return url.includes(OFF_JAN) ? { code: 200, body: offResponse } : { code: 404, body: { status: 0 } };
-    if (url.includes('api.anthropic.com')) return { code: 200, body: { model: 'claude-opus-5-5', stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(ocrResult) }] } };
+    if (url.includes('api.anthropic.com')) {
+      if (opts && /"web_search"/.test(String(opts.payload))) {
+        const jan = (String(opts.payload).match(/\d{13}/) || [''])[0];
+        const j = jan === WEB_JAN ? webResult : { found: false };
+        return { code: 200, body: { model: 'claude-opus-5-5', stop_reason: 'end_turn', content: [{ type: 'text', text: '```json\n' + JSON.stringify(j) + '\n```' }] } };
+      }
+      return { code: 200, body: { model: 'claude-opus-5-5', stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(ocrResult) }] } };
+    }
     return { code: 500, body: 'mock: unknown url ' + url };
   }
 });
