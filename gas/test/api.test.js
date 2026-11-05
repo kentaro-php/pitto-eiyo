@@ -12,6 +12,7 @@ function fetchMock(url) {
   if (url.includes('oauth2.googleapis.com/tokeninfo')) {
     const token = decodeURIComponent(url.split('id_token=')[1]);
     if (token === 'good') return { code: 200, body: { aud: 'client-123', iss: 'https://accounts.google.com', sub: '1122', email: 'taro@example.com', email_verified: 'true', name: 'Taro', exp: String(Math.floor(Date.now() / 1000) + 3600) } };
+    if (token === 'good2') return { code: 200, body: { aud: 'client-123', iss: 'https://accounts.google.com', sub: '3344', email: 'hanako@example.com', email_verified: 'true', name: 'Hanako', exp: String(Math.floor(Date.now() / 1000) + 3600) } };
     if (token === 'wrongaud') return { code: 200, body: { aud: 'other', iss: 'https://accounts.google.com', sub: '1', exp: String(Math.floor(Date.now() / 1000) + 3600) } };
     return { code: 400, body: { error: 'invalid_token' } };
   }
@@ -298,4 +299,35 @@ test('手料理・一般食品: setupFoods / products.search / 記録', () => {
   assert.equal(gas.get({ action: 'product.get', jan: '4901234567894' }).data.product, null);
   const check = gas.run('selfCheck');
   assert.equal(check.ok, true); assert.equal(check.foods_registered, r.total);
+});
+
+test('バーコードの無い商品の手入力登録（custom:）: 採番 / 本人だけに検索表示 / 記録', () => {
+  const gas = createGas({ fetch: fetchMock });
+  // クライアントは custom:new で送る → サーバが custom:<32hex> を振り、常に新規行
+  const c1 = gas.call('product.create', { jan: 'custom:new', name: 'パン屋のクロワッサン', serving_basis: 'per_package', serving_g: 45, energy_kcal: 200, protein_g: 4, fat_g: 11, carb_g: 21, salt_g: 0.5, source: 'web' });
+  assert.equal(c1.ok, true, JSON.stringify(c1)); assert.equal(c1.data.created, true);
+  assert.match(c1.data.product.jan, /^custom:[0-9a-f]{32}$/); assert.equal(c1.data.product.source, 'manual', 'custom では web を名乗れない');
+  const c2 = gas.call('product.create', { jan: 'custom:new', name: 'パン屋のクロワッサン', serving_basis: 'per_package', serving_g: 45, energy_kcal: 200 });
+  assert.equal(c2.data.created, true); assert.notEqual(c2.data.product.jan, c1.data.product.jan, '同名でも別行（JAN での重複判定はしない）');
+  assert.equal(gas.call('product.create', { jan: 'custom:Bad id!', name: 'x', serving_basis: 'per_serving', energy_kcal: 1 }).error.code, 'validation');
+  assert.equal(gas.call('product.create', { jan: 'custom:new', name: '定食', serving_basis: 'per_serving', energy_kcal: 1, source: 'ocr' }).data.product.source, 'ocr');
+  // 熱量だけでも登録でき、1食単位で記録できる
+  const c3 = gas.call('product.create', { jan: 'custom:new', name: 'お店のカレー', serving_basis: 'per_serving', energy_kcal: 850 });
+  assert.equal(c3.data.product.protein_g, 0);
+  const lg = gas.call('log.create', { client_id: 'c1', product_id: c3.data.product.id, date: TODAY, amount_mode: 'serving', amount: 1 });
+  assert.equal(lg.ok, true, JSON.stringify(lg)); assert.equal(lg.data.log.energy_kcal, 850); assert.equal(lg.data.log.amount_label, '1食');
+  // 検索・最近の商品に出る。product.get（バーコード照会）では引けない
+  assert.ok(gas.call('products.search', { q: 'くろわっさん' }).data.products.some(p => p.jan === c1.data.product.jan));
+  assert.ok(gas.call('products.recent', {}).data.products.some(p => p.jan === c3.data.product.jan));
+  assert.equal(gas.get({ action: 'product.get', jan: c1.data.product.jan }).error.code, 'validation');
+  // 本人の修正はその場で反映、jan は変わらない
+  const up = gas.call('product.update', { id: c1.data.product.id, jan: '4901234567894', name: 'クロワッサン（大）', serving_basis: 'per_package', serving_g: 60, energy_kcal: 260 });
+  assert.equal(up.data.applied, true); assert.equal(up.data.product.jan, c1.data.product.jan); assert.equal(up.data.product.name, 'クロワッサン（大）');
+  // 他人の手入力商品は検索に出ない（Google 認証で 2 ユーザー）
+  const g2 = createGas({ fetch: fetchMock, properties: { AUTH_MODE: 'google', GOOGLE_CLIENT_ID: 'client-123', ALLOWED_DOMAINS: 'example.com' } });
+  const mine = g2.call('product.create', { jan: 'custom:new', name: '社食のラーメン', serving_basis: 'per_serving', energy_kcal: 600 }, 'good');
+  assert.equal(mine.ok, true, JSON.stringify(mine));
+  assert.equal(g2.call('products.search', { q: 'らーめん' }, 'good').data.products.length, 1);
+  assert.equal(g2.call('products.search', { q: 'らーめん' }, 'good2').data.products.length, 0);
+  assert.equal(g2.call('products.recent', {}, 'good2').data.products.length, 0);
 });

@@ -163,7 +163,11 @@
   /* ---------- JAN / EAN ---------- */
   /** 手料理・一般食品の疑似 JAN（"food:<key>"、Foods.gs が登録） */
   function isFoodJan(s) { return /^food:[a-z0-9_]+$/.test(String(s == null ? '' : s)); }
-  function normJan(s) { if (isFoodJan(s)) return String(s); s = String(s == null ? '' : s).replace(/\D/g, ''); return s.length === 12 ? '0' + s : s; }
+  /** バーコードの無い商品（手入力登録）の疑似 JAN。クライアントは custom:new で送り、サーバが custom:<id> を振る */
+  function isCustomJan(s) { return /^custom:[a-z0-9-]{1,40}$/.test(String(s == null ? '' : s)); }
+  /** バーコード以外の疑似 JAN（food: / custom:）か */
+  function isPseudoJan(s) { return isFoodJan(s) || isCustomJan(s); }
+  function normJan(s) { if (isPseudoJan(s)) return String(s); s = String(s == null ? '' : s).replace(/\D/g, ''); return s.length === 12 ? '0' + s : s; }
   /** 検索用の正規化: 小文字、全角→半角、カタカナ→ひらがな、空白除去（web と GAS で共通） */
   function normSearchText(s) {
     s = String(s == null ? '' : s).toLowerCase().normalize('NFKC').replace(/\s+/g, '');
@@ -257,7 +261,7 @@
   function normalizeProduct(input) {
     input = input || {};
     var jan = normJan(input.jan);
-    if (!isFoodJan(jan) && !eanValid(jan)) throw new ValidationError('JANコードが正しくありません。', 'jan');
+    if (!isPseudoJan(jan) && !eanValid(jan)) throw new ValidationError('JANコードが正しくありません。', 'jan');
     var name = String(input.name || '').trim();
     if (!name) throw new ValidationError('商品名を入力してください。', 'name');
     if (name.length > 120) throw new ValidationError('商品名が長すぎます。', 'name');
@@ -309,7 +313,7 @@
     dateStr: dateStr, parseDate: parseDate, addDays: addDays, addMonths: addMonths, daysInMonth: daysInMonth,
     isValidDate: isValidDate, isValidMonth: isValidMonth, isValidTime: isValidTime, fmtDateJP: fmtDateJP, fmtMonthJP: fmtMonthJP, mealByHour: mealByHour,
     computeTargets: computeTargets, judge: judge, summarize: summarize, overall: overall, allOk: allOk,
-    normJan: normJan, eanValid: eanValid, eanCheckDigit: eanCheckDigit, isFoodJan: isFoodJan, normSearchText: normSearchText,
+    normJan: normJan, eanValid: eanValid, eanCheckDigit: eanCheckDigit, isFoodJan: isFoodJan, isCustomJan: isCustomJan, isPseudoJan: isPseudoJan, normSearchText: normSearchText,
     factorFor: factorFor, availableModes: availableModes, defaultAmount: defaultAmount, amountLabel: amountLabel, isLiquid: isLiquid,
     scaleN: scaleN, sodiumToSalt: sodiumToSalt, totals: totals, emptyTotals: emptyTotals,
     ValidationError: ValidationError, normalizeProduct: normalizeProduct, normalizeProfile: normalizeProfile
@@ -424,7 +428,7 @@ var Db = (function () {
     if (BOOL_COLS[col]) return truthy_(v);
     if (TEXT_COLS[col] || DATE_COLS[col]) {
       var s = String(v);
-      if (col === 'jan') s = PittoLogic.normJan(s); // food:<key>（手料理の疑似 JAN）は normJan が素通しする
+      if (col === 'jan') s = PittoLogic.normJan(s); // food:<key> / custom:<id>（疑似 JAN）は normJan が素通しする
       return s;
     }
     return v;
@@ -673,15 +677,18 @@ var Products = (function () {
     return hint;
   }
 
-  /** POST product.create — jan が既存なら既存を返す（409にしない） */
+  /** POST product.create — jan が既存なら既存を返す（409にしない）
+   *  jan が custom:（バーコードの無い商品の手入力登録）なら、サーバ側で custom:<id> を振って常に新規登録する（本人の検索・最近の商品にだけ出る） */
   function create(params, ctx) {
     var input = params.product || params;
     var norm = L().normalizeProduct(input);
     if (L().isFoodJan(norm.jan)) throw new ApiError('validation', '手料理・一般食品は setupFoods で登録します。', { field: 'jan' });
-    var existing = byJan(norm.jan);
+    var custom = L().isCustomJan(norm.jan);
+    if (custom) norm.jan = 'custom:' + uuid_().replace(/-/g, '');
+    var existing = custom ? null : byJan(norm.jan);
     if (existing) return { product: pub(existing), created: false };
     var now = nowIso_();
-    var source = ['ocr', 'manual', 'web'].indexOf(input.source) >= 0 ? input.source : 'manual';
+    var source = ['ocr', 'manual'].concat(custom ? [] : ['web']).indexOf(input.source) >= 0 ? input.source : 'manual';
     var row = Object.assign({ id: uuid_(), source: source, verified: !!ctx.isAdmin, created_by: ctx.user.id, created_at: now, updated_at: now, deleted_at: '' }, norm);
     Db.insert('products', row);
     saveImage_(row.id, input.image_base64, input.image_media_type, ctx);
@@ -724,7 +731,8 @@ var Products = (function () {
     if (q.length > 40) q = q.slice(0, 40);
     var limit = Math.min(50, Math.max(1, Number(params.limit) || 30));
     var hits = [];
-    Db.findAll('products', function (r) { return !r.deleted_at; }).forEach(function (r) {
+    var uid = ctx && ctx.user ? ctx.user.id : '';
+    Db.findAll('products', function (r) { return !r.deleted_at && (!L().isCustomJan(r.jan) || r.created_by === uid); }).forEach(function (r) {
       var name = normText_(r.name), alias = normText_(Foods.ALIASES[r.jan] || '');
       var score = -1;
       if (name.indexOf(q) === 0) score = 0;

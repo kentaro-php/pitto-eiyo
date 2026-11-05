@@ -109,3 +109,13 @@ test('isFoodJan / normJan / normSearchText', () => {
   assert.equal(L.normSearchText(' ミソ 汁 ABC'), 'みそ汁abc');
   assert.equal(L.normalizeProduct({ jan: 'food:gohan', name: 'ご飯', serving_basis: 'per_serving', serving_g: 150, energy_kcal: 234 }).jan, 'food:gohan');
 });
+
+test('isCustomJan / isPseudoJan（バーコードの無い商品の疑似 JAN）', () => {
+  assert.equal(L.isCustomJan('custom:new'), true); assert.equal(L.isCustomJan('custom:' + 'a'.repeat(32)), true);
+  assert.equal(L.isCustomJan('custom:'), false); assert.equal(L.isCustomJan('custom:Bad id'), false); assert.equal(L.isCustomJan('food:gohan'), false);
+  assert.equal(L.isPseudoJan('food:gohan'), true); assert.equal(L.isPseudoJan('custom:new'), true); assert.equal(L.isPseudoJan('4901234567894'), false);
+  assert.equal(L.normJan('custom:new'), 'custom:new');
+  const p = L.normalizeProduct({ jan: 'custom:new', name: 'お店のカレー', serving_basis: 'per_serving', energy_kcal: 850 });
+  assert.equal(p.jan, 'custom:new'); assert.equal(p.protein_g, 0);
+  assert.deepEqual(L.defaultAmount(p), { mode: 'serving', amount: 1 }); assert.equal(L.factorFor(p, 'serving', 1), 1); assert.equal(L.factorFor(p, 'grams', 100), null, '質量未入力なら g 入力は不可');
+});

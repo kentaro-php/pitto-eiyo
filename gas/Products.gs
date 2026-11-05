@@ -91,15 +91,18 @@ var Products = (function () {
     return hint;
   }
 
-  /** POST product.create — jan が既存なら既存を返す（409にしない） */
+  /** POST product.create — jan が既存なら既存を返す（409にしない）
+   *  jan が custom:（バーコードの無い商品の手入力登録）なら、サーバ側で custom:<id> を振って常に新規登録する（本人の検索・最近の商品にだけ出る） */
   function create(params, ctx) {
     var input = params.product || params;
     var norm = L().normalizeProduct(input);
     if (L().isFoodJan(norm.jan)) throw new ApiError('validation', '手料理・一般食品は setupFoods で登録します。', { field: 'jan' });
-    var existing = byJan(norm.jan);
+    var custom = L().isCustomJan(norm.jan);
+    if (custom) norm.jan = 'custom:' + uuid_().replace(/-/g, '');
+    var existing = custom ? null : byJan(norm.jan);
     if (existing) return { product: pub(existing), created: false };
     var now = nowIso_();
-    var source = ['ocr', 'manual', 'web'].indexOf(input.source) >= 0 ? input.source : 'manual';
+    var source = ['ocr', 'manual'].concat(custom ? [] : ['web']).indexOf(input.source) >= 0 ? input.source : 'manual';
     var row = Object.assign({ id: uuid_(), source: source, verified: !!ctx.isAdmin, created_by: ctx.user.id, created_at: now, updated_at: now, deleted_at: '' }, norm);
     Db.insert('products', row);
     saveImage_(row.id, input.image_base64, input.image_media_type, ctx);
@@ -142,7 +145,8 @@ var Products = (function () {
     if (q.length > 40) q = q.slice(0, 40);
     var limit = Math.min(50, Math.max(1, Number(params.limit) || 30));
     var hits = [];
-    Db.findAll('products', function (r) { return !r.deleted_at; }).forEach(function (r) {
+    var uid = ctx && ctx.user ? ctx.user.id : '';
+    Db.findAll('products', function (r) { return !r.deleted_at && (!L().isCustomJan(r.jan) || r.created_by === uid); }).forEach(function (r) {
       var name = normText_(r.name), alias = normText_(Foods.ALIASES[r.jan] || '');
       var score = -1;
       if (name.indexOf(q) === 0) score = 0;

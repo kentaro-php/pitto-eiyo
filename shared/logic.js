@@ -160,7 +160,11 @@
   /* ---------- JAN / EAN ---------- */
   /** 手料理・一般食品の疑似 JAN（"food:<key>"、Foods.gs が登録） */
   function isFoodJan(s) { return /^food:[a-z0-9_]+$/.test(String(s == null ? '' : s)); }
-  function normJan(s) { if (isFoodJan(s)) return String(s); s = String(s == null ? '' : s).replace(/\D/g, ''); return s.length === 12 ? '0' + s : s; }
+  /** バーコードの無い商品（手入力登録）の疑似 JAN。クライアントは custom:new で送り、サーバが custom:<id> を振る */
+  function isCustomJan(s) { return /^custom:[a-z0-9-]{1,40}$/.test(String(s == null ? '' : s)); }
+  /** バーコード以外の疑似 JAN（food: / custom:）か */
+  function isPseudoJan(s) { return isFoodJan(s) || isCustomJan(s); }
+  function normJan(s) { if (isPseudoJan(s)) return String(s); s = String(s == null ? '' : s).replace(/\D/g, ''); return s.length === 12 ? '0' + s : s; }
   /** 検索用の正規化: 小文字、全角→半角、カタカナ→ひらがな、空白除去（web と GAS で共通） */
   function normSearchText(s) {
     s = String(s == null ? '' : s).toLowerCase().normalize('NFKC').replace(/\s+/g, '');
@@ -254,7 +258,7 @@
   function normalizeProduct(input) {
     input = input || {};
     var jan = normJan(input.jan);
-    if (!isFoodJan(jan) && !eanValid(jan)) throw new ValidationError('JANコードが正しくありません。', 'jan');
+    if (!isPseudoJan(jan) && !eanValid(jan)) throw new ValidationError('JANコードが正しくありません。', 'jan');
     var name = String(input.name || '').trim();
     if (!name) throw new ValidationError('商品名を入力してください。', 'name');
     if (name.length > 120) throw new ValidationError('商品名が長すぎます。', 'name');
@@ -306,7 +310,7 @@
     dateStr: dateStr, parseDate: parseDate, addDays: addDays, addMonths: addMonths, daysInMonth: daysInMonth,
     isValidDate: isValidDate, isValidMonth: isValidMonth, isValidTime: isValidTime, fmtDateJP: fmtDateJP, fmtMonthJP: fmtMonthJP, mealByHour: mealByHour,
     computeTargets: computeTargets, judge: judge, summarize: summarize, overall: overall, allOk: allOk,
-    normJan: normJan, eanValid: eanValid, eanCheckDigit: eanCheckDigit, isFoodJan: isFoodJan, normSearchText: normSearchText,
+    normJan: normJan, eanValid: eanValid, eanCheckDigit: eanCheckDigit, isFoodJan: isFoodJan, isCustomJan: isCustomJan, isPseudoJan: isPseudoJan, normSearchText: normSearchText,
     factorFor: factorFor, availableModes: availableModes, defaultAmount: defaultAmount, amountLabel: amountLabel, isLiquid: isLiquid,
     scaleN: scaleN, sodiumToSalt: sodiumToSalt, totals: totals, emptyTotals: emptyTotals,
     ValidationError: ValidationError, normalizeProduct: normalizeProduct, normalizeProfile: normalizeProfile
