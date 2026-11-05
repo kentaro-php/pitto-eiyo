@@ -22,7 +22,10 @@ var Products = (function () {
   }
   function byJan(jan) { return Db.findOne('products', function (r) { return r.jan === jan && !r.deleted_at; }); }
 
-  /** GET product.get?jan=…&external=1 — 認証不要。外部でヒットした商品はマスタに保存して返す */
+  /** GET/POST product.get { jan, external=1 } — 認証不要。外部でヒットした商品はマスタに保存して返す
+   *  照会順: 自前マスタ → Open Food Facts → Yahoo!（商品名）→ ウェブ照会（商品名＋栄養成分。token でログイン済みのときだけ）。
+   *  ウェブ照会が 5 項目そろって確からしければ source=web でマスタに保存して返し（WEB_LOOKUP_AUTOSAVE=0 で無効）、
+   *  それ以外は hint（登録フォームの初期値）として返す。 */
   function get(params, ctx) {
     var jan = L().normJan(params.jan);
     if (!L().eanValid(jan)) throw new ApiError('validation', 'JANコードが正しくありません（桁数またはチェックデジット）。', { field: 'jan' });
@@ -30,18 +33,62 @@ var Products = (function () {
     if (p) return { product: pub(p), found: 'master' };
     if (str_(params.external) !== '1') return { product: null, found: null };
     var off = External.openFoodFacts(jan);
-    if (off) {
-      var saved = Db.withLock(function () {
-        var again = byJan(jan);
-        if (again) return again;
-        var now = nowIso_();
-        var row = Object.assign({ id: uuid_(), source: 'off', verified: false, created_by: '', created_at: now, updated_at: now, deleted_at: '' }, off);
-        return Db.insert('products', row);
-      });
-      return { product: pub(saved), found: 'off' };
+    if (off) return { product: pub(saveExternal_(jan, off, 'off')), found: 'off' };
+    var yh = External.yahooProductName(jan);
+    // ウェブ照会は有料（API 課金）なので、token でログイン済みと確認できた呼び出しだけ行う（exec URL は匿名でも叩けるため）
+    var web = optionalUser_(params) ? External.webLookup(jan, yh && yh.name ? yh.name : '') : null;
+    if (web && web.found) {
+      var row = webProductRow_(jan, web, yh);
+      if (row && webAutosaveOk_(web)) {
+        return { product: pub(saveExternal_(jan, row, 'web')), found: 'web', lookup: { source_url: web.source_url, confidence: web.confidence, notes: web.notes } };
+      }
     }
-    var hint = External.yahooProductName(jan);
-    return { product: null, found: null, hint: hint };
+    var hint = webHint_(yh, web);
+    var out = { product: null, found: null, hint: hint };
+    if (prop_('DEBUG') === '1' && External.webLookupError()) out.lookup_error = External.webLookupError();
+    return out;
+  }
+  function optionalUser_(params) {
+    if (!params || !params.token) return null;
+    try { return Auth.authenticate(params.token); } catch (e) { return null; }
+  }
+  function saveExternal_(jan, data, source) {
+    return Db.withLock(function () {
+      var again = byJan(jan);
+      if (again) return again;
+      var now = nowIso_();
+      var row = Object.assign({ id: uuid_(), source: source, verified: false, created_by: '', created_at: now, updated_at: now, deleted_at: '' }, data);
+      return Db.insert('products', row);
+    });
+  }
+  /** ウェブ照会結果 → products 行（検証に通らなければ null） */
+  function webProductRow_(jan, web, yh) {
+    try {
+      return L().normalizeProduct({
+        jan: jan, name: web.name || (yh && yh.name) || '', brand: web.brand || (yh && yh.brand) || '', quantity_text: web.quantity_text,
+        serving_basis: web.basis, serving_g: web.serving_g, package_g: web.package_g,
+        energy_kcal: web.energy_kcal, protein_g: web.protein_g, fat_g: web.fat_g, carb_g: web.carb_g, salt_g: web.salt_g,
+        sugar_g: web.sugar_g, fiber_g: web.fiber_g, satfat_g: web.satfat_g
+      });
+    } catch (e) { return null; }
+  }
+  function webAutosaveOk_(web) {
+    if (prop_('WEB_LOOKUP_AUTOSAVE', '1') !== '1') return false;
+    var min = Number(prop_('WEB_LOOKUP_MIN_CONFIDENCE', '0.7'));
+    if (!(min >= 0 && min <= 1)) min = 0.7;
+    return web.filled === 5 && !!web.basis && web.confidence >= min;
+  }
+  /** 登録フォームの初期値。Yahoo!（商品名・画像）とウェブ照会（栄養成分）を合成する */
+  function webHint_(yh, web) {
+    if (!yh && !web) return null;
+    var hint = { name: (web && web.name) || (yh && yh.name) || '', brand: (web && web.brand) || (yh && yh.brand) || '', image_url: (yh && yh.image_url) || '', provider: web ? 'web' : 'yahoo' };
+    if (web) {
+      hint.quantity_text = web.quantity_text || '';
+      hint.basis = web.basis || null;
+      ['serving_g', 'package_g', 'energy_kcal', 'protein_g', 'fat_g', 'carb_g', 'salt_g', 'sodium_mg', 'sugar_g', 'fiber_g', 'satfat_g'].forEach(function (k) { if (web[k] != null) hint[k] = web[k]; });
+      hint.filled = web.filled; hint.confidence = web.confidence; hint.notes = web.notes || ''; hint.source_url = web.source_url || '';
+    }
+    return hint;
   }
 
   /** POST product.create — jan が既存なら既存を返す（409にしない） */
@@ -51,7 +98,7 @@ var Products = (function () {
     var existing = byJan(norm.jan);
     if (existing) return { product: pub(existing), created: false };
     var now = nowIso_();
-    var source = ['ocr', 'manual'].indexOf(input.source) >= 0 ? input.source : 'manual';
+    var source = ['ocr', 'manual', 'web'].indexOf(input.source) >= 0 ? input.source : 'manual';
     var row = Object.assign({ id: uuid_(), source: source, verified: !!ctx.isAdmin, created_by: ctx.user.id, created_at: now, updated_at: now, deleted_at: '' }, norm);
     Db.insert('products', row);
     saveImage_(row.id, input.image_base64, input.image_media_type, ctx);

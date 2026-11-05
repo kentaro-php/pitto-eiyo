@@ -190,3 +190,65 @@ test('OCR: refusal / 不正JSON / Gemini 切替', () => {
   const g = gas.call('ocr.parse', img);
   assert.equal(g.ok, true, JSON.stringify(g)); assert.equal(g.data.provider, 'gemini'); assert.equal(g.data.result.energy_kcal, 62); assert.equal(g.data.result.serving_g, null);
 });
+
+test('ウェブ照会（Claude web_search をモック）: 自動保存 / 要確認ヒント / キャッシュ / pause_turn', () => {
+  const WEB_JAN = '4902105001011';
+  const LOW_JAN = '4901777298088';
+  let lookups = 0, pauses = 0;
+  const webJson = { found: true, name: 'カップヌードル', brand: '日清食品', quantity_text: '78g', basis: 'per_package', serving_g: 78, package_g: 78, energy_kcal: 351, protein_g: 10.5, fat_g: 14.6, carb_g: 44.5, salt_g: 4.9, sodium_mg: null, sugar_g: null, fiber_g: null, satfat_g: null, confidence: 0.9, source_url: 'https://www.nissin.com/jp/products/items/1', notes: '公式サイトの栄養成分表示' };
+  const lowJson = Object.assign({}, webJson, { name: 'どこかのクッキー', confidence: 0.4, salt_g: null, sodium_mg: 120, source_url: 'https://shop.example.com/item' });
+  const gas = createGas({ properties: { CLAUDE_API_KEY: 'sk-test' }, fetch: (url, opts) => {
+    if (url.includes('openfoodfacts.org')) return { code: 404, body: { status: 0 } };
+    if (url.includes('api.anthropic.com')) {
+      const body = JSON.parse(opts.payload);
+      assert.ok(Array.isArray(body.tools) && body.tools.some(t => t.name === 'web_search'), 'web_search ツールを渡す');
+      assert.equal(body.output_config, undefined, '引用付きの web_search と JSON schema は併用しない');
+      lookups++;
+      const jan = body.messages[0].content.match(/\d{13}/)[0];
+      if (jan === WEB_JAN && body.messages.length === 1) { pauses++; return { code: 200, body: { stop_reason: 'pause_turn', content: [{ type: 'server_tool_use', id: 's1', name: 'web_search', input: { query: jan } }] } }; }
+      const j = jan === LOW_JAN ? lowJson : webJson;
+      return { code: 200, body: { model: 'claude-opus-5-5', stop_reason: 'end_turn', content: [
+        { type: 'text', text: '調べました。' },
+        { type: 'text', text: '```json\n' + JSON.stringify(j) + '\n```', citations: [{ type: 'web_search_result_location', url: j.source_url }] }
+      ] } };
+    }
+    throw new Error('unexpected fetch ' + url);
+  } });
+  // 5 項目そろって確からしい → source=web で保存
+  assert.deepEqual(gas.get({ action: 'product.get', jan: WEB_JAN, external: '1' }).data, { product: null, found: null, hint: null }, '匿名の GET では有料照会しない');
+  assert.equal(lookups, 0);
+  const r = gas.call('product.get', { jan: WEB_JAN, external: '1' }).data;
+  assert.equal(r.found, 'web', JSON.stringify(r)); assert.equal(r.product.source, 'web'); assert.equal(r.product.name, 'カップヌードル');
+  assert.equal(r.product.serving_basis, 'per_package'); assert.equal(r.product.serving_g, 78); assert.equal(r.product.salt_g, 4.9); assert.equal(r.product.verified, false);
+  assert.equal(r.lookup.source_url, webJson.source_url); assert.equal(r.lookup.confidence, 0.9);
+  assert.equal(pauses, 1, 'pause_turn を 1 回継続した'); assert.equal(lookups, 2);
+  assert.equal(gas.get({ action: 'product.get', jan: WEB_JAN }).data.found, 'master');
+  // 信頼度が低い → 保存せず hint（フォーム初期値）。ナトリウムは食塩相当量に換算
+  const low = gas.call('product.get', { jan: LOW_JAN, external: '1' }).data;
+  assert.equal(low.product, null); assert.equal(low.hint.provider, 'web'); assert.equal(low.hint.name, 'どこかのクッキー');
+  assert.equal(low.hint.filled, 5); assert.equal(low.hint.salt_g, 0.3); assert.equal(low.hint.confidence, 0.4); assert.equal(low.hint.source_url, lowJson.source_url);
+  const before = lookups;
+  assert.equal(gas.call('product.get', { jan: LOW_JAN, external: '1' }).data.hint.name, 'どこかのクッキー');
+  assert.equal(lookups, before, '2 回目はキャッシュ');
+  // 自動保存を止める設定
+  gas.state.props.WEB_LOOKUP_AUTOSAVE = '0';
+  gas.state.cache.clear();
+  const noSave = gas.call('product.get', { jan: '4901234567894', external: '1' }).data;
+  assert.equal(noSave.product, null); assert.equal(noSave.hint.energy_kcal, 351);
+  // hint から登録するとき source=web を受け付ける
+  const created = gas.call('product.create', { jan: '4901234567894', name: 'カップヌードル', serving_basis: 'per_package', package_g: 78, energy_kcal: 351, protein_g: 10.5, fat_g: 14.6, carb_g: 44.5, salt_g: 4.9, source: 'web' });
+  assert.equal(created.ok, true, JSON.stringify(created)); assert.equal(created.data.product.source, 'web');
+  // 無効化 / キー無し / API エラーでは照会しない・落ちない
+  gas.state.props.WEB_LOOKUP = '0'; gas.state.cache.clear();
+  const off = gas.call('product.get', { jan: '4902102072618', external: '1' }).data;
+  assert.equal(off.product, null); assert.equal(off.hint, null);
+  delete gas.state.props.WEB_LOOKUP;
+  const gas2 = createGas({ properties: { CLAUDE_API_KEY: 'bad', DEBUG: '1' }, fetch: (url) => url.includes('anthropic') ? { code: 401, body: { error: { message: 'invalid x-api-key' } } } : { code: 404, body: { status: 0 } } });
+  const err = gas2.call('product.get', { jan: WEB_JAN, external: '1' }).data;
+  assert.equal(gas2.state.props.WEB_LOOKUP_COUNT.split(':')[1], '1', '照会回数を記録');
+  assert.equal(err.product, null); assert.equal(err.hint, null); assert.match(err.lookup_error, /401/);
+  // 1 日の上限
+  gas2.state.props.WEB_LOOKUP_DAILY_LIMIT = '1';
+  const capped = gas2.call('product.get', { jan: LOW_JAN, external: '1' }).data;
+  assert.match(capped.lookup_error, /上限/);
+});

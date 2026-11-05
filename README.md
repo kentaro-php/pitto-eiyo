@@ -45,7 +45,7 @@ pitto-eiyo/
 | F1 バーコード読取（連続読取・手入力） | `web/scanner.js`。BarcodeDetector 対応端末はそれを使い、iOS Safari など未対応端末は ZXing で中央の帯を 1 秒に約 6 回デコード。同じ値が 2 回続いたら確定。写真からの読取と 13 桁手入力も可 |
 | F2〜F6 商品表示・記録・日次/月次集計・総括判定 | `shared/logic.js` + `gas/Logs.gs` `gas/Summary.gs`。判定の表・総括文のテンプレートは設計書 8 節どおり |
 | F7 目標設定 | `computeTargets`（基礎代謝基準値 × 体重 × 身体活動レベル、PFC バランス、食塩目標、高血圧オプション、手動上書き、増減 kcal） |
-| F8 未登録商品のフォールバック | 自前マスタ → Open Food Facts → Yahoo!（商品名のみ）→ OCR 登録 / 手入力。登録した商品は共有マスタに蓄積（`source` 列で区別） |
+| F8 未登録商品のフォールバック | 自前マスタ → Open Food Facts → Yahoo!（商品名のみ）→ ウェブ照会（Claude の web_search / web_fetch でメーカー・通販ページの商品名と栄養成分表示を読む。確からしければ `source=web` で自動保存、そうでなければ登録フォームの初期値）→ OCR 登録 / 手入力。登録した商品は共有マスタに蓄積（`source` 列で区別） |
 | F9 認証 | Google ログイン（GIS）→ ID トークンを GAS で検証（`aud` 確認、Cache に有効期限まで保存） |
 | F10 履歴編集・修正提案 | 記録の消去、商品情報の修正（登録者本人・管理者は反映、それ以外は `product_suggestions` に提案として保存） |
 | F11 最近の商品 | スキャン画面の「最近の商品」 |
@@ -78,7 +78,11 @@ pitto-eiyo/
 | `GOOGLE_CLIENT_ID` | google のとき必須 | OAuth 2.0 クライアント ID（下記 3） |
 | `ALLOWED_EMAILS` / `ALLOWED_DOMAINS` | | カンマ区切り。設定すると、それ以外のアカウントは利用不可（テスター限定公開に） |
 | `ADMIN_EMAILS` | | 管理者。商品情報をその場で修正でき、登録した商品が「確認済み」になる |
-| `CLAUDE_API_KEY` | OCR を使うなら | Anthropic の API キー。モデルは `CLAUDE_MODEL`（既定 `claude-opus-5-5`） |
+| `CLAUDE_API_KEY` | OCR・ウェブ照会を使うなら | Anthropic の API キー。モデルは `CLAUDE_MODEL`（既定 `claude-opus-5-5`） |
+| `WEB_LOOKUP` | | 未登録 JAN の商品名と栄養成分を Claude の web_search / web_fetch で調べる（既定 `1`。`0` で無効）。`CLAUDE_API_KEY` が必要。1 回あたり検索 $0.01 ×最大4 ＋トークン代。同じ JAN は 6 時間キャッシュ |
+| `WEB_LOOKUP_AUTOSAVE` | | `1`（既定）: 5 項目そろって信頼度が `WEB_LOOKUP_MIN_CONFIDENCE`（既定 `0.7`）以上なら `source=web` で商品マスタに保存して即表示。`0`: 常に登録フォームの初期値（要確認）にとどめる |
+| `WEB_LOOKUP_MODEL` | | ウェブ照会に使うモデル（既定は `CLAUDE_MODEL`） |
+| `WEB_LOOKUP_DAILY_LIMIT` | | ウェブ照会の 1 日の上限回数（既定 `100`。課金の暴走防止。回数は `WEB_LOOKUP_COUNT` に自動記録） |
 | `OCR_PROVIDER` | | `claude`（既定）または `gemini`（`GEMINI_API_KEY`、`GEMINI_MODEL` 既定 `gemini-2.5-flash`） |
 | `YAHOO_CLIENT_ID` | | Yahoo!ショッピング API のクライアント ID（未登録商品の商品名補完） |
 | `SPREADSHEET_ID` | スタンドアロンのとき | シートに紐づかないスクリプトから使う場合のみ |
