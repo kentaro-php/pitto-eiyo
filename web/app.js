@@ -487,8 +487,8 @@
     var editing = !!p, custom = L.isCustomJan(editing ? p.jan : state.jan);
     $('reg-title').textContent = editing ? '商品情報を修正' : (custom ? 'バーコードなしで登録' : '商品を登録');
     $('reg-intro').textContent = editing ? '数値を修正して保存します。登録した本人（または管理者）以外の修正は「修正提案」として記録されます。'
-      : custom ? 'バーコードが無い・読めない商品やお店の料理を、名前と栄養成分で登録します（自分だけに表示されます）。栄養成分表示があれば撮影で自動入力できます。無ければ熱量だけでも登録できます。'
-      : 'この商品はまだ登録されていません。パッケージの栄養成分表示を撮影すると、数値を自動で入力します。';
+      : custom ? 'バーコードが無い・読めない商品やお店の料理を、名前と栄養成分で登録します（自分だけに表示されます）。栄養成分表示の写真・スクショがあれば「画像を選ぶ」で自動入力できます。無ければ熱量だけでも登録できます。'
+      : 'この商品はまだ登録されていません。栄養成分表示の写真やスクショを添付すると、数値を自動で入力します。';
     $('f-jan-field').hidden = custom;
     $('f-error').hidden = true; setMsg('ocr-status', '');
     FIELDS.forEach(function (f) { var el = $('f-' + f); el.classList.remove('lowconf'); });
@@ -505,7 +505,16 @@
     syncBasisLabel();
     var h = state.hint;
     if (!editing && h && h.provider === 'web' && h.filled > 0) applyLookup(h, 'web');
-    else if (!editing && h && h.name) setMsg('ocr-status', h.provider === 'web' ? '商品名はウェブ検索から取得しました。栄養成分は見つからなかったので、撮影または手入力してください。' : '商品名は Yahoo!ショッピングから取得しました。栄養成分は撮影または手入力してください。');
+    else if (!editing && h && h.name) setMsg('ocr-status', h.provider === 'web' ? '商品名はウェブ検索から取得しました。栄養成分は見つからなかったので、画像を添付するか手入力してください。' : '商品名は Yahoo!ショッピングから取得しました。栄養成分は画像を添付するか手入力してください。');
+    updateOcrPasteBtn();
+  }
+  function updateOcrPasteBtn() {
+    var btn = $('ocr-paste');
+    if (!btn) return;
+    var can = !!(navigator.clipboard && navigator.clipboard.read);
+    btn.hidden = !can;
+    var row = btn.parentElement;
+    if (row && row.classList.contains('ocr-secondary')) row.classList.toggle('ocr-paste-one', can);
   }
   /** ウェブ照会の結果をフォームに流し込む（OCR と同じ要確認扱い） */
   function applyLookup(h, kind) {
@@ -562,8 +571,7 @@
       else handleApiError(e);
     } finally { btn.disabled = false; }
   });
-  $('ocr-file').addEventListener('change', async function () {
-    var f = this.files && this.files[0]; this.value = '';
+  async function runOcrFromFile(f) {
     if (!f) return;
     if (!Api.isConfigured() || !online()) { setMsg('ocr-status', '自動読み取りには通信が必要です。表示を見ながら手入力してください。', 'err'); return; }
     $('ocr-status').innerHTML = '<span class="spin"></span>読み取り中…（10秒ほどかかります）';
@@ -576,7 +584,38 @@
       var msg = e.code === 'ocr_refused' || e.code === 'ocr_failed' || e.code === 'rate_limited' || e.code === 'upstream' ? e.message : (Api.isNetworkError(e) ? '通信できませんでした。' : (e.message || '読み取りに失敗しました。'));
       setMsg('ocr-status', msg + ' 手入力もできます。', 'err');
     }
+  }
+  function bindOcrFileInput(id) {
+    var el = $(id);
+    if (!el) return;
+    el.addEventListener('change', function () {
+      var f = this.files && this.files[0];
+      this.value = '';
+      runOcrFromFile(f);
+    });
+  }
+  bindOcrFileInput('ocr-pick');
+  bindOcrFileInput('ocr-camera');
+  $('ocr-paste').addEventListener('click', async function () {
+    if (!navigator.clipboard || !navigator.clipboard.read) return;
+    try {
+      var items = await navigator.clipboard.read();
+      var blob = null, type = 'image/png';
+      for (var i = 0; i < items.length; i++) {
+        var types = items[i].types || [];
+        for (var t = 0; t < types.length; t++) {
+          if (/^image\//.test(types[t])) { blob = await items[i].getType(types[t]); type = types[t]; break; }
+        }
+        if (blob) break;
+      }
+      if (!blob) { setMsg('ocr-status', 'クリップボードに画像がありません。スクショをコピーしてからもう一度押してください。', 'err'); return; }
+      var ext = type.indexOf('jpeg') >= 0 ? 'jpg' : type.indexOf('webp') >= 0 ? 'webp' : 'png';
+      await runOcrFromFile(new File([blob], 'paste.' + ext, { type: type }));
+    } catch (e) {
+      setMsg('ocr-status', '貼り付けできませんでした（ブラウザの許可が必要な場合があります）。「画像を選ぶ」からスクショを選んでください。', 'err');
+    }
   });
+  updateOcrPasteBtn();
   function applyOcr(r) {
     if (!r) { setMsg('ocr-status', '読み取り結果を解釈できませんでした。手入力してください。', 'err'); return; }
     var low = r.confidence < 0.7, filled = 0;
@@ -588,7 +627,7 @@
     if (r.name && !$('f-name').value.trim()) $('f-name').value = r.name;
     state.ocrUsed = filled > 0;
     var conf = Math.round((r.confidence || 0) * 100);
-    if (!filled) setMsg('ocr-status', '数値を読み取れませんでした。表示が大きく写るように撮り直すか、手入力してください。', 'err');
+    if (!filled) setMsg('ocr-status', '数値を読み取れませんでした。栄養成分表示が大きく写る画像を選び直すか、手入力してください。', 'err');
     else if (low) setMsg('ocr-status', filled + '項目を読み取りました（信頼度 ' + conf + '%）。黄色の欄をパッケージと照合してください。' + (r.notes ? ' ' + r.notes : ''), 'warn');
     else setMsg('ocr-status', filled + '項目を読み取りました（信頼度 ' + conf + '%）。数値を確認して保存してください。' + (r.notes ? ' ' + r.notes : ''), 'ok');
   }

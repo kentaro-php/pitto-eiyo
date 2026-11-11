@@ -45,6 +45,10 @@ button,.btn,.pill,.chip,.tab,.mini,.item{appearance:none;-webkit-appearance:none
 .input[readonly]{color:var(--muted);background:var(--bg)}
 .input.lowconf{border-color:var(--warn);background:var(--warn-bg)}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ocr-actions{display:flex;flex-direction:column;gap:10px}
+.ocr-actions .btn{margin:0}
+.ocr-secondary .btn{font-size:15px;min-height:46px;padding:11px 10px}
+.ocr-secondary.ocr-paste-one{grid-template-columns:1fr}
 .two>*{min-width:0}
 .btn{width:100%;font:inherit;font-size:17px;font-weight:700;padding:13px 14px;border-radius:12px;border:0;cursor:pointer;min-height:50px;text-align:center;display:block;text-decoration:none}
 .btn.primary{background:var(--primary);color:var(--on-primary)}

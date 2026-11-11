@@ -1,6 +1,6 @@
 /* ピッと栄養 Service Worker — アプリ本体（シェル）をキャッシュしてオフラインでも開けるようにする。
  * API（GAS）や Google ログインの通信はキャッシュしない。 */
-var VERSION = 'pitto-shell-v4';
+var VERSION = 'pitto-shell-v5';
 var ASSETS = ['./', './index.html', './styles.css', './config.js', './logic.js', './api.js', './auth.js', './store.js', './scanner.js', './app.js',
   './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './vendor/zxing-library-0.21.3.min.js'];
 

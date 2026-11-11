@@ -43,7 +43,7 @@ const assert = (cond, msg) => { if (!cond) throw new Error('ASSERT: ' + msg); };
     assert(await page.inputValue('#f-jan') === '4901234567894', 'JAN 引き継ぎ');
     // OCR（モックの Claude 応答で自動入力、信頼度 62% → 黄色）
     const pngFile = path.join(__dirname, '..', '..', 'web', 'icons', 'icon-192.png');
-    await page.setInputFiles('#ocr-file', pngFile);
+    await page.setInputFiles('#ocr-pick', pngFile);
     await page.waitForFunction(() => /項目を読み取りました/.test(document.querySelector('#ocr-status').textContent), null, { timeout: 15000 });
     assert(await page.inputValue('#f-energy_kcal') === '121', 'OCR 熱量');
     assert(await page.inputValue('#f-salt_g') === '1.19', 'OCR ナトリウム→食塩換算');
